@@ -14,6 +14,7 @@
 #include "threads/flags.h"
 #include "threads/init.h"
 #include "threads/interrupt.h"
+#include "threads/malloc.h"
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
@@ -230,16 +231,15 @@ load (const char *cmdline_args, void (**eip) (void), void **esp)
   char **split_cmdline_args = malloc(sizeof(char *) * 1);
 
   int num_of_args = 0;
-  for (token = strtok_r (cmdline_args, " ", &save_ptr); token != NULL;
-    token = strtok_r (NULL, " ", &save_ptr))
+  for (token = strtok_r (cmdline_args, " ", &save_ptr); token != NULL; token = strtok_r (NULL, " ", &save_ptr))
   {
     /* Reallocate array to hold one more string. Occurs only when given more than one command. */
-    if (num_of_args > 0)
+    if (num_of_args >= 1)
       split_cmdline_args = realloc(split_cmdline_args, sizeof(char *) * (num_of_args + 1));
     
-    /* Allocate space for string, copy token into cmd_args. */
+    /* Allocate space for string, copy token into split_cmdline_args. */
     split_cmdline_args[num_of_args] = malloc(sizeof(char) * ((strlen(token) + 1)));
-    strlcpy(split_cmdline_args[num_of_args], token, strlen(token));
+    strlcpy(split_cmdline_args[num_of_args], token, strlen(token) + 1);
     num_of_args += 1;
   }
 
@@ -460,7 +460,49 @@ setup_stack (void **esp, int argc, char *argv[])
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
       if (success)
       {
-        *esp = PHYS_BASE - 12;
+        *esp = PHYS_BASE;
+
+        /* 
+          Setting up the stack inspired by:
+          https://github.com/ChristianJHughes/pintos-project2/blob/master/pintos/src/userprog/process.c
+        */
+        uint32_t * argv_stack_pointers[argc];
+
+        /* Push command line arguments. */
+        for (int arg_num = argc - 1; arg_num >= 0; arg_num--)
+        {
+          *esp = *esp - (sizeof(char) * (strlen(argv[arg_num]) + 1));
+          memcpy(*esp, argv[arg_num], sizeof(char) * (strlen(argv[arg_num]) + 1));
+          argv_stack_pointers[arg_num] = (uint32_t *) * esp;
+        }
+
+        /* Word-align esp pointer for increased efficiency. */
+        while ((int)*esp % 4 != 0)
+        {
+          *esp -= 1;
+        }
+
+        /* Allocate and add "null" sentinel. */
+        *esp -= 4;
+        (*(int *)(*esp)) = 0;
+
+        for (int arg_num = argc - 1; arg_num >= 0; arg_num--)
+        {
+          *esp -= 4;
+          (*(uint32_t **)(*esp)) = argv_stack_pointers[arg_num];
+        }
+
+        /* Push pointer to pointer of first argument in command list. */
+        *esp -= 4;
+        (*(uintptr_t **)(*esp)) = *esp + 4;
+
+        /* Push number of arguments. */
+        *esp = *esp - 4;
+        *(int *)(*esp) = argc;
+
+        /* Fake return address. */
+        *esp -= 4;
+        (*(int *)(*esp)) = 0;
       }
       else
         palloc_free_page (kpage);

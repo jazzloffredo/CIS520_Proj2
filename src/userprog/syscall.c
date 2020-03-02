@@ -15,6 +15,23 @@ syscall_init (void)
 static void
 syscall_handler (struct intr_frame *f UNUSED) 
 {
-  printf ("system call!\n");
-  thread_exit ();
+  int *system_call = f->esp;
+
+  switch (*system_call)
+  {
+    case SYS_HALT:
+      halt ();
+  }
+}
+
+static void
+s_halt (void)
+{
+  shutdown_power_off ();
+}
+
+static void
+s_exit (void)
+{
+
 }
