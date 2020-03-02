@@ -2,7 +2,12 @@
 #include <stdio.h>
 #include <syscall-nr.h>
 #include "threads/interrupt.h"
+#include "threads/synch.h"
 #include "threads/thread.h"
+#include "filesys/filesys.h"
+
+//Lock for File SysCall Critical Sections
+struct lock file_lock;
 
 static void syscall_handler (struct intr_frame *);
 
@@ -10,6 +15,7 @@ void
 syscall_init (void) 
 {
   intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
+  //Might Need Lock Here (see slides)
 }
 
 static void
@@ -33,7 +39,7 @@ halt (void)
 static void
 exit (int status)
 {
-
+  
 }
 
 static pid_t
@@ -47,17 +53,23 @@ wait (pid_t pid)
 {
 
 }
-
+//Done
 static bool
 create (const char *file, unsigned initial_size)
 {
-
+  lock_aquire(&file_lock);
+  bool retVal = filesys_create(file, initial_size);
+  lock_release(&file_lock);
+  return retVal;
 }
-
+//Done
 static bool
 remove (const char *file)
 {
-
+  lock_aquire(&file_lock);
+  bool retVal = filesys_remove(file);
+  lock_release(&file_lock);
+  return retVal;
 }
 
 static int
