@@ -26,31 +26,31 @@ static bool load (const char *cmdline, void (**eip) (void), void **esp);
    before process_execute() returns.  Returns the new process's
    thread id, or TID_ERROR if the thread cannot be created. */
 tid_t
-process_execute (const char *file_name) 
+process_execute (const char *cmdline) 
 {
-  char *fn_copy;
+  char *cmdline_copy;
   tid_t tid;
 
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
-  fn_copy = palloc_get_page (0);
-  if (fn_copy == NULL)
+  cmdline_copy = palloc_get_page (0);
+  if (cmdline_copy == NULL)
     return TID_ERROR;
-  strlcpy (fn_copy, file_name, PGSIZE);
+  strlcpy (cmdline_copy, cmdline, PGSIZE);
 
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  tid = thread_create (cmdline_copy, PRI_DEFAULT, start_process, cmdline_copy);
   if (tid == TID_ERROR)
-    palloc_free_page (fn_copy); 
+    palloc_free_page (cmdline_copy); 
   return tid;
 }
 
 /* A thread function that loads a user process and starts it
    running. */
 static void
-start_process (void *file_name_)
+start_process (void *cmdline_args_)
 {
-  char *file_name = file_name_;
+  char *cmdline_args = cmdline_args_;
   struct intr_frame if_;
   bool success;
 
@@ -59,10 +59,10 @@ start_process (void *file_name_)
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
-  success = load (file_name, &if_.eip, &if_.esp);
+  success = load (cmdline_args, &if_.eip, &if_.esp);
 
   /* If load failed, quit. */
-  palloc_free_page (file_name);
+  palloc_free_page (cmdline_args);
   if (!success) 
     thread_exit ();
 
@@ -88,7 +88,8 @@ start_process (void *file_name_)
 int
 process_wait (tid_t child_tid UNUSED) 
 {
-  return -1;
+  // TODO: Implement.
+  while (true) { }
 }
 
 /* Free the current process's resources. */
@@ -195,7 +196,7 @@ struct Elf32_Phdr
 #define PF_W 2          /* Writable. */
 #define PF_R 4          /* Readable. */
 
-static bool setup_stack (void **esp);
+static bool setup_stack (void **esp, int argc, char **argv);
 static bool validate_segment (const struct Elf32_Phdr *, struct file *);
 static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
                           uint32_t read_bytes, uint32_t zero_bytes,
@@ -206,7 +207,7 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
    and its initial stack pointer into *ESP.
    Returns true if successful, false otherwise. */
 bool
-load (const char *file_name, void (**eip) (void), void **esp) 
+load (const char *cmdline_args, void (**eip) (void), void **esp) 
 {
   struct thread *t = thread_current ();
   struct Elf32_Ehdr ehdr;
@@ -221,11 +222,32 @@ load (const char *file_name, void (**eip) (void), void **esp)
     goto done;
   process_activate ();
 
+  /* 
+    Dynamic memory allocation for putting tokenized string into array taken from:
+    https://stackoverflow.com/questions/36614140/how-do-i-dynamically-allocate-memory-for-an-array-of-strings-in-c  
+  */
+  char *token, *save_ptr;
+  char **split_cmdline_args = malloc(sizeof(char *) * 1);
+
+  int num_of_args = 0;
+  for (token = strtok_r (cmdline_args, " ", &save_ptr); token != NULL;
+    token = strtok_r (NULL, " ", &save_ptr))
+  {
+    /* Reallocate array to hold one more string. Occurs only when given more than one command. */
+    if (num_of_args > 0)
+      split_cmdline_args = realloc(split_cmdline_args, sizeof(char *) * (num_of_args + 1));
+    
+    /* Allocate space for string, copy token into cmd_args. */
+    split_cmdline_args[num_of_args] = malloc(sizeof(char) * ((strlen(token) + 1)));
+    strlcpy(split_cmdline_args[num_of_args], token, strlen(token));
+    num_of_args += 1;
+  }
+
   /* Open executable file. */
-  file = filesys_open (file_name);
+  file = filesys_open (split_cmdline_args[0]);
   if (file == NULL) 
     {
-      printf ("load: %s: open failed\n", file_name);
+      printf ("load: %s: open failed\n", split_cmdline_args[0]);
       goto done; 
     }
 
@@ -238,7 +260,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
       || ehdr.e_phentsize != sizeof (struct Elf32_Phdr)
       || ehdr.e_phnum > 1024) 
     {
-      printf ("load: %s: error loading executable\n", file_name);
+      printf ("load: %s: error loading executable\n", split_cmdline_args[0]);
       goto done; 
     }
 
@@ -302,7 +324,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
     }
 
   /* Set up stack. */
-  if (!setup_stack (esp))
+  if (!setup_stack (esp, num_of_args, split_cmdline_args))
     goto done;
 
   /* Start address. */
@@ -427,7 +449,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 /* Create a minimal stack by mapping a zeroed page at the top of
    user virtual memory. */
 static bool
-setup_stack (void **esp) 
+setup_stack (void **esp, int argc, char *argv[]) 
 {
   uint8_t *kpage;
   bool success = false;
@@ -437,7 +459,9 @@ setup_stack (void **esp)
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
       if (success)
+      {
         *esp = PHYS_BASE - 12;
+      }
       else
         palloc_free_page (kpage);
     }
