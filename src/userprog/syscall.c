@@ -5,6 +5,7 @@
 #include "threads/synch.h"
 #include "threads/thread.h"
 #include "filesys/filesys.h"
+#include "lib/user/syscall.h"
 
 //Lock for File SysCall Critical Sections
 struct lock file_lock;
@@ -15,7 +16,7 @@ void
 syscall_init (void) 
 {
   intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
-  //Might Need Lock Here (see slides)
+  lock_init(&file_lock); //Added init to Lock
 }
 
 static void
@@ -26,7 +27,70 @@ syscall_handler (struct intr_frame *f UNUSED)
   switch (*system_call)
   {
     case SYS_HALT:
+    {
       halt ();
+      break;
+    }
+    case SYS_EXIT:
+    {
+      exit();
+      break;
+    }
+    case SYS_EXEC:
+    {
+      exec();
+      break;
+    }
+    case SYS_WAIT:
+    {
+      wait();
+      break;
+    }
+    case SYS_CREATE:
+    {
+      create();
+      break;
+    }
+    case SYS_REMOVE:
+    {
+      remove();
+      break;
+    }
+    case SYS_OPEN:
+    {
+      open();
+      break;
+    }
+    case SYS_FILESIZE:
+    {
+      filesize();
+      break;
+    }
+    case SYS_READ:
+    {
+      read() ;
+      break;
+    }
+    case SYS_WRITE:
+    {
+      write();
+      break;
+    }
+    case SYS_SEEK:
+    {
+      seek();
+      break;
+    }
+    case SYS_TELL:
+    {
+      tell();
+      break;
+    }
+    case SYS_CLOSE:
+    {
+      close();
+      break;
+    }
   }
 }
 
