@@ -53,7 +53,12 @@ wait (pid_t pid)
 {
 
 }
-//Done
+
+/*
+  We first acquire a lock since this is File I/O.
+  Then we call filesys_create, which creates a new file and returns true if successful.
+  Lock then is released and filesys_create return value is returned.
+*/
 static bool
 create (const char *file, unsigned initial_size)
 {
@@ -62,7 +67,12 @@ create (const char *file, unsigned initial_size)
   lock_release(&file_lock);
   return retVal;
 }
-//Done
+
+/*
+  We acquire a lock first since this is File I/O.
+  Then we call filesys_remove, which removes a file given a filename and returns true if successful.
+  Lock is then released and the return value of filesys_remove is returned.
+*/
 static bool
 remove (const char *file)
 {
