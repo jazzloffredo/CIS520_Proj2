@@ -22,7 +22,7 @@
 #define EXECUTABLE_NAME split_cmdline_args[0]
 
 static thread_func start_process NO_RETURN;
-static bool load (const char *cmdline, void (**eip) (void), void **esp);
+static bool load (char **cmdline, void (**eip) (void), void **esp);
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -49,7 +49,7 @@ process_execute (const char *cmdline)
   char **split_cmdline_args = malloc(sizeof(char *) * 1);
 
   int num_of_args = 0;
-  for (token = strtok_r (cmdline_args, " ", &save_ptr); token != NULL; token = strtok_r (NULL, " ", &save_ptr))
+  for (token = strtok_r (cmdline_copy, " ", &save_ptr); token != NULL; token = strtok_r (NULL, " ", &save_ptr))
   {
     /* Reallocate array to hold one more string. Occurs only when given more than one command. */
     if (num_of_args >= 1)
@@ -112,7 +112,10 @@ int
 process_wait (tid_t child_tid UNUSED) 
 {
   // TODO: Implement.
-  while (true) { }
+  while (true) 
+  { 
+    thread_yield ();
+  }
 }
 
 /* Free the current process's resources. */
@@ -219,7 +222,7 @@ struct Elf32_Phdr
 #define PF_W 2          /* Writable. */
 #define PF_R 4          /* Readable. */
 
-static bool setup_stack (void **esp, int argc, char **argv);
+static bool setup_stack (void **esp, char **argv);
 static bool validate_segment (const struct Elf32_Phdr *, struct file *);
 static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
                           uint32_t read_bytes, uint32_t zero_bytes,
@@ -230,7 +233,7 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
    and its initial stack pointer into *ESP.
    Returns true if successful, false otherwise. */
 bool
-load (const char **split_cmdline_args, void (**eip) (void), void **esp) 
+load (char **split_cmdline_args, void (**eip) (void), void **esp) 
 {
   struct thread *t = thread_current ();
   struct Elf32_Ehdr ehdr;
@@ -453,6 +456,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 static bool
 setup_stack (void **esp, char *argv[]) 
 {
+  int argc = (int) (sizeof(*argv) / sizeof(argv[0]));
   uint8_t *kpage;
   bool success = false;
 
@@ -472,48 +476,56 @@ setup_stack (void **esp, char *argv[])
           Getting number of elements in array inspired by comments from:
           https://stackoverflow.com/questions/37538/how-do-i-determine-the-size-of-my-array-in-c
         */
-        int argc = (int) (sizeof(argv) / sizeof(argv[0]));
         uint32_t * argv_stack_pointers[argc];
 
         /* Push command line arguments. */
         for (int arg_num = argc - 1; arg_num >= 0; arg_num--)
         {
-          *esp = *esp - (sizeof(char) * (strlen(argv[arg_num]) + 1));
-          memcpy(*esp, argv[arg_num], sizeof(char) * (strlen(argv[arg_num]) + 1));
+          *esp -= strlen(argv[arg_num]);
+          memcpy (*esp, argv[arg_num], strlen(argv[arg_num]));
           argv_stack_pointers[arg_num] = (uint32_t *) * esp;
         }
 
         /* Word-align esp pointer for increased memory access speed. */
-        while ((int)*esp % 4 != 0)
-        {
-          *esp -= 1;
-        }
+        int word_align = ((int) *esp) % 4;
+        *esp -= word_align;
+        memset (*esp, 0, word_align);
 
         /* Allocate and add "null" sentinel. */
         *esp -= 4;
-        (*(int *)(*esp)) = 0;
+        memset (*esp, 0, 4);
 
         for (int arg_num = argc - 1; arg_num >= 0; arg_num--)
         {
-          *esp -= 4;
-          (*(uint32_t **)(*esp)) = argv_stack_pointers[arg_num];
+          *esp -= sizeof(char *);
+          memcpy (*esp, argv_stack_pointers[arg_num], sizeof(char *));
         }
 
         /* Push pointer to pointer of first argument in command list. */
-        *esp -= 4;
-        (*(uintptr_t **)(*esp)) = *esp + 4;
+        *esp -= sizeof(char **);
+        memcpy (*esp, (*esp + sizeof(char **)), sizeof(char **));
 
         /* Push number of arguments. */
-        *esp = *esp - 4;
-        *(int *)(*esp) = argc;
-
-        /* Fake return address. */
         *esp -= 4;
-        (*(int *)(*esp)) = 0;
+        memset (*esp, argc, 4);
+
+        /* Fake return address (NULL). */
+        *esp -= sizeof(void *);
+        memcpy (*esp, 0, sizeof(void *));
+
+        hex_dump ((uintptr_t)*esp, *esp, sizeof(char) * 8, true);
       }
       else
         palloc_free_page (kpage);
     }
+
+  /* Clean up malloc'd memory to avoid leakage. */
+  for (int index = 0; index < argc; index++)
+  {
+    free (argv[index]);
+  }
+  free (argv);
+
   return success;
 }
 
