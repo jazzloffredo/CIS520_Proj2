@@ -120,14 +120,15 @@ syscall_handler (struct intr_frame *f UNUSED)
   }
 }
 
-static void
+void
 halt (void)
 {
   shutdown_power_off ();
 }
-/*Prints to console the current threads name and status when exiting based off what was passed in
-  and then exits via thread_exit()*/
-static void
+
+/* Prints to console the current threads name and status when exiting based off what was passed in
+   and then exits via thread_exit(). */
+void
 exit (int status)
 {
   struct thread *cur = thread_current();
@@ -135,27 +136,29 @@ exit (int status)
   thread_exit();
 }
 
-static pid_t
+pid_t
 exec (const char *cmd_line)
 {
 
 }
 
-static int
+
+int
 wait (pid_t pid)
 {
 
 }
+
 
 /*
   We first acquire a lock since this is File I/O.
   Then we call filesys_create, which creates a new file and returns true if successful.
   Lock then is released and filesys_create return value is returned.
 */
-static bool
+bool
 create (const char *file, unsigned initial_size)
 {
-  lock_aquire(&file_lock);
+  lock_acquire(&file_lock);
   bool create_successful = filesys_create(file, initial_size);
   lock_release(&file_lock);
 
@@ -167,53 +170,54 @@ create (const char *file, unsigned initial_size)
   Then we call filesys_remove, which removes a file given a filename and returns true if successful.
   Lock is then released and the return value of filesys_remove is returned.
 */
-static bool
+bool
 remove (const char *file)
 {
-  lock_aquire(&file_lock);
+  lock_acquire(&file_lock);
   bool remove_successful = filesys_remove(file);
   lock_release(&file_lock);
 
   return remove_successful;
 }
 
-static int
+
+int
 open (const char *file)
 {
 
 }
 
-static int
+int
 filesize (int fd)
 {
 
 }
 
-static int
+int
 read (int fd, void *buffer, unsigned size)
 {
 
 }
 
-static int
+int
 write (int fd, const void *buffer, unsigned size)
 {
 
 }
 
-static void
+void
 seek (int fd, unsigned position)
 {
 
 }
 
-static unsigned
+unsigned
 tell (int fd)
 {
 
 }
 
-static void
+void
 close (int fd)
 {
   
