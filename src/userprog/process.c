@@ -19,10 +19,8 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 
-#define EXECUTABLE_NAME split_cmdline_args[0]
-
 static thread_func start_process NO_RETURN;
-static bool load (char **cmdline, void (**eip) (void), void **esp);
+static bool load (const char *cmdline, void (**eip) (void), void **esp);
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -41,39 +39,23 @@ process_execute (const char *cmdline)
     return TID_ERROR;
   strlcpy (cmdline_copy, cmdline, PGSIZE);
 
-  /* 
-    Dynamic memory allocation for putting tokenized string into array taken from:
-    https://stackoverflow.com/questions/36614140/how-do-i-dynamically-allocate-memory-for-an-array-of-strings-in-c  
-  */
-  char *token, *save_ptr;
-  char **split_cmdline_args = malloc(sizeof(char *) * 1);
-
-  int num_of_args = 0;
-  for (token = strtok_r (cmdline_copy, " ", &save_ptr); token != NULL; token = strtok_r (NULL, " ", &save_ptr))
-  {
-    /* Reallocate array to hold one more string. Occurs only when given more than one command. */
-    if (num_of_args >= 1)
-      split_cmdline_args = realloc(split_cmdline_args, sizeof(char *) * (num_of_args + 1));
-    
-    /* Allocate space for string, copy token into split_cmdline_args. */
-    split_cmdline_args[num_of_args] = malloc(sizeof(char) * ((strlen(token) + 1)));
-    strlcpy(split_cmdline_args[num_of_args], token, strlen(token) + 1);
-    num_of_args += 1;
-  }
+  /* Get name of executable, ignoring arguments. */
+  char *executable_name, *save_ptr;
+  executable_name = strtok_r (cmdline_copy, " ", &save_ptr);
 
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (EXECUTABLE_NAME, PRI_DEFAULT, start_process, split_cmdline_args);
+  tid = thread_create (executable_name, PRI_DEFAULT, start_process, cmdline_copy);
   if (tid == TID_ERROR)
-    palloc_free_page (EXECUTABLE_NAME); 
+    palloc_free_page (cmdline_copy); 
   return tid;
 }
 
 /* A thread function that loads a user process and starts it
    running. */
 static void
-start_process (void *split_cmdline_args_)
+start_process (void *cmdline_copy_)
 {
-  char **split_cmdline_args = split_cmdline_args_;
+  char *cmdline_copy = cmdline_copy_;
   struct intr_frame if_;
   bool success;
 
@@ -82,10 +64,10 @@ start_process (void *split_cmdline_args_)
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
-  success = load (split_cmdline_args, &if_.eip, &if_.esp);
+  success = load (cmdline_copy, &if_.eip, &if_.esp);
 
   /* If load failed, quit. */
-  palloc_free_page (EXECUTABLE_NAME);
+  palloc_free_page (cmdline_copy);
   if (!success) 
     thread_exit ();
 
@@ -111,9 +93,8 @@ start_process (void *split_cmdline_args_)
 int
 process_wait (tid_t child_tid UNUSED) 
 {
-  // TODO: Implement.
-  while (true) 
-  { 
+  while (true)
+  {
     thread_yield ();
   }
 }
@@ -222,7 +203,7 @@ struct Elf32_Phdr
 #define PF_W 2          /* Writable. */
 #define PF_R 4          /* Readable. */
 
-static bool setup_stack (void **esp, char **argv);
+static bool setup_stack (void **esp, const char *cmdline_copy);
 static bool validate_segment (const struct Elf32_Phdr *, struct file *);
 static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
                           uint32_t read_bytes, uint32_t zero_bytes,
@@ -233,7 +214,7 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
    and its initial stack pointer into *ESP.
    Returns true if successful, false otherwise. */
 bool
-load (char **split_cmdline_args, void (**eip) (void), void **esp) 
+load (const char *cmdline_copy, void (**eip) (void), void **esp) 
 {
   struct thread *t = thread_current ();
   struct Elf32_Ehdr ehdr;
@@ -242,6 +223,10 @@ load (char **split_cmdline_args, void (**eip) (void), void **esp)
   bool success = false;
   int i;
 
+  /* Get name of executable, ignoring arguments. */
+  char *executable_name, *save_ptr;
+  executable_name = strtok_r (cmdline_copy, " ", &save_ptr);
+
   /* Allocate and activate page directory. */
   t->pagedir = pagedir_create ();
   if (t->pagedir == NULL) 
@@ -249,10 +234,10 @@ load (char **split_cmdline_args, void (**eip) (void), void **esp)
   process_activate ();
 
   /* Open executable file. */
-  file = filesys_open (EXECUTABLE_NAME);
+  file = filesys_open (executable_name);
   if (file == NULL) 
     {
-      printf ("load: %s: open failed\n", EXECUTABLE_NAME);
+      printf ("load: %s: open failed\n", executable_name);
       goto done; 
     }
 
@@ -265,7 +250,7 @@ load (char **split_cmdline_args, void (**eip) (void), void **esp)
       || ehdr.e_phentsize != sizeof (struct Elf32_Phdr)
       || ehdr.e_phnum > 1024) 
     {
-      printf ("load: %s: error loading executable\n", EXECUTABLE_NAME);
+      printf ("load: %s: error loading executable\n", executable_name);
       goto done; 
     }
 
@@ -329,7 +314,7 @@ load (char **split_cmdline_args, void (**eip) (void), void **esp)
     }
 
   /* Set up stack. */
-  if (!setup_stack (esp, split_cmdline_args))
+  if (!setup_stack (esp, cmdline_copy))
     goto done;
 
   /* Start address. */
@@ -454,9 +439,8 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 /* Create a minimal stack by mapping a zeroed page at the top of
    user virtual memory. */
 static bool
-setup_stack (void **esp, char *argv[]) 
+setup_stack (void **esp, const char *cmdline_copy) 
 {
-  int argc = (int) (sizeof(*argv) / sizeof(argv[0]));
   uint8_t *kpage;
   bool success = false;
 
@@ -469,20 +453,35 @@ setup_stack (void **esp, char *argv[])
         *esp = PHYS_BASE;
 
         /* 
-          Setting up the stack and determining correct pointer types inspired by:
-          https://github.com/ChristianJHughes/pintos-project2/blob/master/pintos/src/userprog/process.c
-          https://github.com/Waqee/Pintos-Project-2/blob/master/src/userprog/process.c
+          Split command line arguments into separate tokens, delimited by spaces.
 
-          Getting number of elements in array inspired by comments from:
-          https://stackoverflow.com/questions/37538/how-do-i-determine-the-size-of-my-array-in-c
+          Dynamic memory allocation for putting tokenized string into array inspired by:
+          https://stackoverflow.com/questions/36614140/how-do-i-dynamically-allocate-memory-for-an-array-of-strings-in-c  
         */
-        uint32_t * argv_stack_pointers[argc];
+        char *token, *save_ptr;
+        char **split_cmdline_args = malloc(sizeof(char *) * 1);
 
-        /* Push command line arguments. */
-        for (int arg_num = argc - 1; arg_num >= 0; arg_num--)
+        int num_of_args = 0;
+        for (token = strtok_r (cmdline_copy, " ", &save_ptr); token != NULL; token = strtok_r (NULL, " ", &save_ptr))
         {
-          *esp -= strlen(argv[arg_num]);
-          memcpy (*esp, argv[arg_num], strlen(argv[arg_num]));
+          /* Reallocate array to hold one more string. Occurs only when given more than one command. */
+          if (num_of_args >= 1)
+            split_cmdline_args = realloc(split_cmdline_args, sizeof(char *) * (num_of_args + 1));
+          
+          /* Allocate space for string, copy token into split_cmdline_args. */
+          split_cmdline_args[num_of_args] = malloc(sizeof(char) * ((strlen(token) + 1)));
+          strlcpy(split_cmdline_args[num_of_args], token, strlen(token) + 1);
+          num_of_args += 1;
+        }
+
+        /* Keep track of initial argv addresses to reference later. */
+        uint32_t * argv_stack_pointers[num_of_args];
+
+        /* Push command line arguments as string data. Save argv pointers. */
+        for (int arg_num = num_of_args - 1; arg_num >= 0; arg_num--)
+        {
+          *esp -= strlen(split_cmdline_args[arg_num]);
+          memcpy (*esp, split_cmdline_args[arg_num], strlen(split_cmdline_args[arg_num]));
           argv_stack_pointers[arg_num] = (uint32_t *) * esp;
         }
 
@@ -495,7 +494,8 @@ setup_stack (void **esp, char *argv[])
         *esp -= 4;
         memset (*esp, 0, 4);
 
-        for (int arg_num = argc - 1; arg_num >= 0; arg_num--)
+        /* Push addresses to argv data from above. */
+        for (int arg_num = num_of_args - 1; arg_num >= 0; arg_num--)
         {
           *esp -= sizeof(char *);
           memcpy (*esp, argv_stack_pointers[arg_num], sizeof(char *));
@@ -507,25 +507,25 @@ setup_stack (void **esp, char *argv[])
 
         /* Push number of arguments. */
         *esp -= 4;
-        memset (*esp, argc, 4);
+        memset (*esp, num_of_args, 4);
 
         /* Fake return address (NULL). */
         *esp -= sizeof(void *);
-        memcpy (*esp, 0, sizeof(void *));
+        memset (*esp, 0, sizeof(void *));
 
+        // Debugging
         hex_dump ((uintptr_t)*esp, *esp, sizeof(char) * 8, true);
+
+        /* Clean up malloc'd memory to avoid leakage. */
+        for (int index = 0; index < num_of_args; index++)
+        {
+          free (split_cmdline_args[index]);
+        }
+        free (split_cmdline_args);        
       }
       else
         palloc_free_page (kpage);
     }
-
-  /* Clean up malloc'd memory to avoid leakage. */
-  for (int index = 0; index < argc; index++)
-  {
-    free (argv[index]);
-  }
-  free (argv);
-
   return success;
 }
 
