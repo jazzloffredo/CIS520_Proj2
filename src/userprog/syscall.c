@@ -1,16 +1,21 @@
 #include "userprog/syscall.h"
 #include <stdio.h>
 #include <syscall-nr.h>
+#include "threads/init.h"
 #include "threads/interrupt.h"
 #include "threads/synch.h"
 #include "threads/thread.h"
+#include "threads/vaddr.h"
+#include "filesys/file.h"
 #include "filesys/filesys.h"
 #include "lib/user/syscall.h"
+#include "userprog/pagedir.h"
 
 /* Lock for syscalls dealing with critical sections of files. */
 struct lock file_lock;
 
 static void syscall_handler (struct intr_frame *);
+static bool is_valid_user_vaddr (void *);
 
 void
 syscall_init (void) 
@@ -22,17 +27,15 @@ syscall_init (void)
 static void
 syscall_handler (struct intr_frame *f UNUSED) 
 {
-  int *system_call = f->esp;
-  int args[4];
+  if (!is_valid_user_vaddr (f->esp))
+    exit (-1);
 
- //Get the args into array format for evaluation in switch statement
-  for(int i = 0; i < 4; i++) {
-    args[i] = *((int*) f->esp+i);
-  }
-
-  /*Switch case to check what Syscall was made and calls the appropriate function by passing in needed args, 
-    if the function returns anything but void it is stored on the return register (eax)*/
-  switch (*system_call)
+  /*
+    Acts on various syscalls. Calls appropriate function. Extracts and passes args.
+    If function returns anything, value is stored in eax register.
+  */
+  int sys_code = *(int *)f->esp;
+  switch (sys_code)
   {
     case SYS_HALT:
     {
@@ -41,32 +44,32 @@ syscall_handler (struct intr_frame *f UNUSED)
     }
     case SYS_EXIT:
     {
-      int status = args[0];
-      exit(status);
+      int status = *((int *)f->esp + 1);
+      exit (status);
       break;
     }
     case SYS_EXEC:
     {
-      const char * cmd_line = ((const char *)args[0]);
-      f->eax = exec(cmd_line);
+      void *cmd_line = (void *)(*((int*)f->esp + 1));
+      f->eax = exec((const char *)cmd_line);
       break;
     }
     case SYS_WAIT:
     {
-      int p_id = args[0];
+      int p_id = *((int *)f->esp + 1);
       f->eax = wait(p_id);
       break;
     }
     case SYS_CREATE:
     {
-      const char * file = ((const char *)args[0]);
-      unsigned init_size = (unsigned) args[1];
-      f->eax = create(file, init_size);
+      void *file = (void *)(*((int*)f->esp + 1))
+      unsigned initial_size = *((unsigned *)f->esp + 2);
+      f->eax = create((const char *)file, init_size);
       break;
     }
     case SYS_REMOVE:
     {
-      const char * file = ((const char *)args[0]);
+      void *file = (void *)(*((int*)f->esp + 1))
       f->eax = remove(file);
       break;
     }
@@ -78,7 +81,7 @@ syscall_handler (struct intr_frame *f UNUSED)
     }
     case SYS_FILESIZE:
     {
-      int fd = args[0];
+      int fd = *((int *)f->esp + 1);
       f->eax = filesize(fd);
       break;
     }
@@ -92,10 +95,14 @@ syscall_handler (struct intr_frame *f UNUSED)
     }
     case SYS_WRITE:
     {
-      int fd = args[0];
-      const void * buffer = (const void*) args[1];
-      unsigned size = (unsigned) args[2];
+      /* Extract all three arguments. */
+      int fd = *((int *)f->esp + 1)
+      void *buffer = (void *)(*((int*)f->esp + 2));
+      unsigned size = *((unsigned *)f->esp + 3);
+
+      /* Call WRITE and store return in eax register. */
       f->eax = write(fd, buffer, size);
+
       break;
     }
     case SYS_SEEK:
@@ -126,8 +133,10 @@ halt (void)
   shutdown_power_off ();
 }
 
-/* Prints to console the current threads name and status when exiting based off what was passed in
-   and then exits via thread_exit(). */
+/* 
+  Prints to console the current threads name and status when exiting based off what was passed in
+  and then exits via thread_exit().
+*/
 void
 exit (int status)
 {
@@ -202,7 +211,18 @@ read (int fd, void *buffer, unsigned size)
 int
 write (int fd, const void *buffer, unsigned size)
 {
+  lock_acquire (&file_lock);
+  /* Write to STDOUT. */
+  if (fd == 1)
+  {
+    putbuf ((const char *)buffer, (size_t)size)
+  }
+  /* Otherwise, write to open file. */
+  else
+  {
 
+  }
+  lock_release (&file_lock);
 }
 
 void
@@ -221,4 +241,20 @@ void
 close (int fd)
 {
   
+}
+
+static bool
+is_valid_user_vaddr (void *check_vaddr)
+{
+  bool valid = true;
+
+  if (check_vaddr == NULL                 || 
+      check_vaddr < (void *) 0x08048000   || 
+      !is_user_vaddr (check_vaddr)        || 
+      !pagedir_get_page (thread_current ()->pagedir, check_vaddr))
+  {
+    valid = false;
+  }
+
+  return valid;
 }

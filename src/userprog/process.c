@@ -93,10 +93,7 @@ start_process (void *cmdline_copy_)
 int
 process_wait (tid_t child_tid UNUSED) 
 {
-  while (true)
-  {
-    thread_yield ();
-  }
+  sema_down (&thread_current ()->waiting_sema);
 }
 
 /* Free the current process's resources. */

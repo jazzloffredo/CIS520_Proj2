@@ -283,6 +283,7 @@ thread_exit (void)
   ASSERT (!intr_context ());
 
 #ifdef USERPROG
+  sema_up (&thread_current ()->parent->waiting_sema);
   process_exit ();
 #endif
 
@@ -463,6 +464,10 @@ init_thread (struct thread *t, const char *name, int priority)
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
   t->magic = THREAD_MAGIC;
+
+#ifdef USERPROG
+  sema_init (t->waiting_sema, 0);
+#endif
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
