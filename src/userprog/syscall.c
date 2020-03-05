@@ -7,7 +7,7 @@
 #include "filesys/filesys.h"
 #include "lib/user/syscall.h"
 
-//Lock for File SysCall Critical Sections
+/* Lock for syscalls dealing with critical sections of files. */
 struct lock file_lock;
 
 static void syscall_handler (struct intr_frame *);
@@ -16,7 +16,7 @@ void
 syscall_init (void) 
 {
   intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
-  lock_init(&file_lock); //Added init to Lock
+  lock_init(&file_lock);
 }
 
 static void
@@ -130,8 +130,8 @@ halt (void)
 static void
 exit (int status)
 {
-  struct thread * current = thread_current();
-  printf("%s: exit(%d)\n", current->name, status);
+  struct thread *cur = thread_current();
+  printf("%s: exit(%d)\n", cur->name, status);
   thread_exit();
 }
 
@@ -156,9 +156,10 @@ static bool
 create (const char *file, unsigned initial_size)
 {
   lock_aquire(&file_lock);
-  bool retVal = filesys_create(file, initial_size);
+  bool create_successful = filesys_create(file, initial_size);
   lock_release(&file_lock);
-  return retVal;
+
+  return create_successful;
 }
 
 /*
@@ -170,9 +171,10 @@ static bool
 remove (const char *file)
 {
   lock_aquire(&file_lock);
-  bool retVal = filesys_remove(file);
+  bool remove_successful = filesys_remove(file);
   lock_release(&file_lock);
-  return retVal;
+
+  return remove_successful;
 }
 
 static int

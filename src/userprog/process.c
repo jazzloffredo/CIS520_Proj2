@@ -19,6 +19,8 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 
+#define EXECUTABLE_NAME split_cmdline_args[0]
+
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
 
@@ -39,19 +41,39 @@ process_execute (const char *cmdline)
     return TID_ERROR;
   strlcpy (cmdline_copy, cmdline, PGSIZE);
 
+  /* 
+    Dynamic memory allocation for putting tokenized string into array taken from:
+    https://stackoverflow.com/questions/36614140/how-do-i-dynamically-allocate-memory-for-an-array-of-strings-in-c  
+  */
+  char *token, *save_ptr;
+  char **split_cmdline_args = malloc(sizeof(char *) * 1);
+
+  int num_of_args = 0;
+  for (token = strtok_r (cmdline_args, " ", &save_ptr); token != NULL; token = strtok_r (NULL, " ", &save_ptr))
+  {
+    /* Reallocate array to hold one more string. Occurs only when given more than one command. */
+    if (num_of_args >= 1)
+      split_cmdline_args = realloc(split_cmdline_args, sizeof(char *) * (num_of_args + 1));
+    
+    /* Allocate space for string, copy token into split_cmdline_args. */
+    split_cmdline_args[num_of_args] = malloc(sizeof(char) * ((strlen(token) + 1)));
+    strlcpy(split_cmdline_args[num_of_args], token, strlen(token) + 1);
+    num_of_args += 1;
+  }
+
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (cmdline_copy, PRI_DEFAULT, start_process, cmdline_copy);
+  tid = thread_create (EXECUTABLE_NAME, PRI_DEFAULT, start_process, split_cmdline_args);
   if (tid == TID_ERROR)
-    palloc_free_page (cmdline_copy); 
+    palloc_free_page (EXECUTABLE_NAME); 
   return tid;
 }
 
 /* A thread function that loads a user process and starts it
    running. */
 static void
-start_process (void *cmdline_args_)
+start_process (void *split_cmdline_args_)
 {
-  char *cmdline_args = cmdline_args_;
+  char **split_cmdline_args = split_cmdline_args_;
   struct intr_frame if_;
   bool success;
 
@@ -60,10 +82,10 @@ start_process (void *cmdline_args_)
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
-  success = load (cmdline_args, &if_.eip, &if_.esp);
+  success = load (split_cmdline_args, &if_.eip, &if_.esp);
 
   /* If load failed, quit. */
-  palloc_free_page (cmdline_args);
+  palloc_free_page (EXECUTABLE_NAME);
   if (!success) 
     thread_exit ();
 
@@ -208,7 +230,7 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
    and its initial stack pointer into *ESP.
    Returns true if successful, false otherwise. */
 bool
-load (const char *cmdline_args, void (**eip) (void), void **esp) 
+load (const char **split_cmdline_args, void (**eip) (void), void **esp) 
 {
   struct thread *t = thread_current ();
   struct Elf32_Ehdr ehdr;
@@ -223,31 +245,11 @@ load (const char *cmdline_args, void (**eip) (void), void **esp)
     goto done;
   process_activate ();
 
-  /* 
-    Dynamic memory allocation for putting tokenized string into array taken from:
-    https://stackoverflow.com/questions/36614140/how-do-i-dynamically-allocate-memory-for-an-array-of-strings-in-c  
-  */
-  char *token, *save_ptr;
-  char **split_cmdline_args = malloc(sizeof(char *) * 1);
-
-  int num_of_args = 0;
-  for (token = strtok_r (cmdline_args, " ", &save_ptr); token != NULL; token = strtok_r (NULL, " ", &save_ptr))
-  {
-    /* Reallocate array to hold one more string. Occurs only when given more than one command. */
-    if (num_of_args >= 1)
-      split_cmdline_args = realloc(split_cmdline_args, sizeof(char *) * (num_of_args + 1));
-    
-    /* Allocate space for string, copy token into split_cmdline_args. */
-    split_cmdline_args[num_of_args] = malloc(sizeof(char) * ((strlen(token) + 1)));
-    strlcpy(split_cmdline_args[num_of_args], token, strlen(token) + 1);
-    num_of_args += 1;
-  }
-
   /* Open executable file. */
-  file = filesys_open (split_cmdline_args[0]);
+  file = filesys_open (EXECUTABLE_NAME);
   if (file == NULL) 
     {
-      printf ("load: %s: open failed\n", split_cmdline_args[0]);
+      printf ("load: %s: open failed\n", EXECUTABLE_NAME);
       goto done; 
     }
 
@@ -260,7 +262,7 @@ load (const char *cmdline_args, void (**eip) (void), void **esp)
       || ehdr.e_phentsize != sizeof (struct Elf32_Phdr)
       || ehdr.e_phnum > 1024) 
     {
-      printf ("load: %s: error loading executable\n", split_cmdline_args[0]);
+      printf ("load: %s: error loading executable\n", EXECUTABLE_NAME);
       goto done; 
     }
 
@@ -324,7 +326,7 @@ load (const char *cmdline_args, void (**eip) (void), void **esp)
     }
 
   /* Set up stack. */
-  if (!setup_stack (esp, num_of_args, split_cmdline_args))
+  if (!setup_stack (esp, split_cmdline_args))
     goto done;
 
   /* Start address. */
@@ -449,7 +451,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 /* Create a minimal stack by mapping a zeroed page at the top of
    user virtual memory. */
 static bool
-setup_stack (void **esp, int argc, char *argv[]) 
+setup_stack (void **esp, char *argv[]) 
 {
   uint8_t *kpage;
   bool success = false;
@@ -463,9 +465,14 @@ setup_stack (void **esp, int argc, char *argv[])
         *esp = PHYS_BASE;
 
         /* 
-          Setting up the stack inspired by:
+          Setting up the stack and determining correct pointer types inspired by:
           https://github.com/ChristianJHughes/pintos-project2/blob/master/pintos/src/userprog/process.c
+          https://github.com/Waqee/Pintos-Project-2/blob/master/src/userprog/process.c
+
+          Getting number of elements in array inspired by comments from:
+          https://stackoverflow.com/questions/37538/how-do-i-determine-the-size-of-my-array-in-c
         */
+        int argc = (int) (sizeof(argv) / sizeof(argv[0]));
         uint32_t * argv_stack_pointers[argc];
 
         /* Push command line arguments. */
@@ -476,7 +483,7 @@ setup_stack (void **esp, int argc, char *argv[])
           argv_stack_pointers[arg_num] = (uint32_t *) * esp;
         }
 
-        /* Word-align esp pointer for increased efficiency. */
+        /* Word-align esp pointer for increased memory access speed. */
         while ((int)*esp % 4 != 0)
         {
           *esp -= 1;
