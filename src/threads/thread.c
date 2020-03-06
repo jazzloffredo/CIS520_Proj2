@@ -466,8 +466,8 @@ init_thread (struct thread *t, const char *name, int priority)
   t->magic = THREAD_MAGIC;
 
 #ifdef USERPROG
-  sema_init (t->waiting_sema, 0);
-  list_init (t->open_files);
+  sema_init (&t->waiting_sema, 0);
+  list_init (&t->open_files);
   t->fd_counter = 2;
 #endif
 

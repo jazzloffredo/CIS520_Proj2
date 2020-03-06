@@ -322,6 +322,8 @@ load (const char *cmdline_copy, void (**eip) (void), void **esp)
  done:
   /* We arrive here whether the load is successful or not. */
   file_close (file);
+  if (file != NULL)
+    file_deny_write (file);
   return success;
 }
 
@@ -472,18 +474,18 @@ setup_stack (void **esp, const char *cmdline_copy)
         }
 
         /* Keep track of initial argv addresses to reference later. */
-        uint32_t * argv_stack_pointers[num_of_args];
+        int argv_stack_pointers[num_of_args];
 
         /* Push command line arguments as string data. Save argv pointers. */
         for (int arg_num = num_of_args - 1; arg_num >= 0; arg_num--)
         {
           *esp -= strlen(split_cmdline_args[arg_num]);
           memcpy (*esp, split_cmdline_args[arg_num], strlen(split_cmdline_args[arg_num]));
-          argv_stack_pointers[arg_num] = (uint32_t *) * esp;
+          argv_stack_pointers[arg_num] = (int) *esp;
         }
 
         /* Word-align esp pointer for increased memory access speed. */
-        int word_align = ((int) *esp) % 4;
+        int word_align = (size_t)*esp % 4;
         *esp -= word_align;
         memset (*esp, 0, word_align);
 
@@ -495,12 +497,12 @@ setup_stack (void **esp, const char *cmdline_copy)
         for (int arg_num = num_of_args - 1; arg_num >= 0; arg_num--)
         {
           *esp -= sizeof(char *);
-          memcpy (*esp, argv_stack_pointers[arg_num], sizeof(char *));
+          memset (*esp, argv_stack_pointers[arg_num], sizeof(char *));
         }
 
         /* Push pointer to pointer of first argument in command list. */
         *esp -= sizeof(char **);
-        memcpy (*esp, (*esp + sizeof(char **)), sizeof(char **));
+        memset (*esp, (int)(*esp + sizeof(char **)), sizeof(char **));
 
         /* Push number of arguments. */
         *esp -= 4;
@@ -511,7 +513,7 @@ setup_stack (void **esp, const char *cmdline_copy)
         memset (*esp, 0, sizeof(void *));
 
         // Debugging
-        hex_dump ((uintptr_t)*esp, *esp, sizeof(char) * 8, true);
+        hex_dump ((uintptr_t)*esp, *esp, sizeof(char) * 32, true);
 
         /* Clean up malloc'd memory to avoid leakage. */
         for (int index = 0; index < num_of_args; index++)
