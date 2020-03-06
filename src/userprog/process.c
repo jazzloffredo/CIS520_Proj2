@@ -450,77 +450,58 @@ setup_stack (void **esp, const char *cmdline_copy)
       if (success)
       {
         *esp = PHYS_BASE;
-
-        /* 
-          Split command line arguments into separate tokens, delimited by spaces.
-
-          Dynamic memory allocation for putting tokenized string into array inspired by:
-          https://stackoverflow.com/questions/36614140/how-do-i-dynamically-allocate-memory-for-an-array-of-strings-in-c  
+        
+        /*
+          Setting up the stack inspired by the following resources:
+            - https://static1.squarespace.com/static/5b18aa0955b02c1de94e4412/t/5b85fad2f950b7b16b7a2ed6/1535507195196/Pintos+Guide          
+            - https://github.com/Waqee/Pintos-Project-2/blob/master/src/userprog/syscall.c
         */
+        int argc = 0,i;
         char *token, *save_ptr;
-        char **split_cmdline_args = malloc(sizeof(char *) * 1);
-
-        int num_of_args = 0;
         for (token = strtok_r (cmdline_copy, " ", &save_ptr); token != NULL; token = strtok_r (NULL, " ", &save_ptr))
+          argc++;
+
+
+        int *argv = calloc(argc,sizeof(int));
+
+        for (token = strtok_r (cmdline_copy, " ", &save_ptr),i=0; token != NULL;
+          token = strtok_r (NULL, " ", &save_ptr),i++)
+          {
+            *esp -= strlen(token) + 1;
+            memcpy(*esp,token,strlen(token) + 1);
+
+            argv[i]=*esp;
+          }
+
+        while((int)*esp%4!=0)
         {
-          /* Reallocate array to hold one more string. Occurs only when given more than one command. */
-          if (num_of_args >= 1)
-            split_cmdline_args = realloc(split_cmdline_args, sizeof(char *) * (num_of_args + 1));
-          
-          /* Allocate space for string, copy token into split_cmdline_args. */
-          split_cmdline_args[num_of_args] = malloc(sizeof(char) * ((strlen(token) + 1)));
-          strlcpy(split_cmdline_args[num_of_args], token, strlen(token) + 1);
-          num_of_args += 1;
+          *esp-=sizeof(char);
+          char x = 0;
+          memcpy(*esp,&x,sizeof(char));
         }
 
-        /* Keep track of initial argv addresses to reference later. */
-        int argv_stack_pointers[num_of_args];
+        int zero = 0;
 
-        /* Push command line arguments as string data. Save argv pointers. */
-        for (int arg_num = num_of_args - 1; arg_num >= 0; arg_num--)
+        *esp-=sizeof(int);
+        memcpy(*esp,&zero,sizeof(int));
+
+        for(i=argc-1;i>=0;i--)
         {
-          *esp -= strlen(split_cmdline_args[arg_num]);
-          memcpy (*esp, split_cmdline_args[arg_num], strlen(split_cmdline_args[arg_num]));
-          argv_stack_pointers[arg_num] = (int) *esp;
+          *esp-=sizeof(int);
+          memcpy(*esp,&argv[i],sizeof(int));
         }
 
-        /* Word-align esp pointer for increased memory access speed. */
-        int word_align = (size_t)*esp % 4;
-        *esp -= word_align;
-        memset (*esp, 0, word_align);
+        int pt = *esp;
+        *esp-=sizeof(int);
+        memcpy(*esp,&pt,sizeof(int));
 
-        /* Allocate and add "null" sentinel. */
-        *esp -= 4;
-        memset (*esp, 0, 4);
+        *esp-=sizeof(int);
+        memcpy(*esp,&argc,sizeof(int));
 
-        /* Push addresses to argv data from above. */
-        for (int arg_num = num_of_args - 1; arg_num >= 0; arg_num--)
-        {
-          *esp -= sizeof(char *);
-          memset (*esp, argv_stack_pointers[arg_num], sizeof(char *));
-        }
+        *esp-=sizeof(int);
+        memcpy(*esp,&zero,sizeof(int));
 
-        /* Push pointer to pointer of first argument in command list. */
-        *esp -= sizeof(char **);
-        memset (*esp, (int)(*esp + sizeof(char **)), sizeof(char **));
-
-        /* Push number of arguments. */
-        *esp -= 4;
-        memset (*esp, num_of_args, 4);
-
-        /* Fake return address (NULL). */
-        *esp -= sizeof(void *);
-        memset (*esp, 0, sizeof(void *));
-
-        // Debugging
-        hex_dump ((uintptr_t)*esp, *esp, sizeof(char) * 32, true);
-
-        /* Clean up malloc'd memory to avoid leakage. */
-        for (int index = 0; index < num_of_args; index++)
-        {
-          free (split_cmdline_args[index]);
-        }
-        free (split_cmdline_args);        
+        free(argv);
       }
       else
         palloc_free_page (kpage);
