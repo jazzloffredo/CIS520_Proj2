@@ -96,13 +96,24 @@ struct thread
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
-    struct thread *parent;
-    struct semaphore *waiting_sema;     /* Process wait for child. */ 
+    struct thread *parent;              /* Pointer to parent process. */
+    struct semaphore *waiting_sema;     /* Process wait for child. */
+    struct list *open_files;            /* A list of struct thread_open_file. */ 
+    int fd_counter;                     /* Seed generator for files. */
 #endif
 
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
   };
+
+#ifdef USERPROG
+struct thread_open_file
+   {
+      struct list_elem elem;
+      int pd;
+      void *file;
+   }
+#endif
 
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.

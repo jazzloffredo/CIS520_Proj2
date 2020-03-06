@@ -467,6 +467,8 @@ init_thread (struct thread *t, const char *name, int priority)
 
 #ifdef USERPROG
   sema_init (t->waiting_sema, 0);
+  list_init (t->open_files);
+  t->fd_counter = 2;
 #endif
 
   old_level = intr_disable ();

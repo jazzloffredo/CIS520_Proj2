@@ -193,7 +193,9 @@ remove (const char *file)
 int
 open (const char *file)
 {
-
+  lock_acquire (&file_lock);
+  
+  lock_release (&file_lock);
 }
 
 int
