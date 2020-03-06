@@ -283,7 +283,7 @@ thread_exit (void)
   ASSERT (!intr_context ());
 
 #ifdef USERPROG
-  sema_up (&thread_current ()->parent->waiting_sema);
+  sema_up (&thread_current ()->parent->waiting_sema);  // ISSUE IS HERE
   process_exit ();
 #endif
 

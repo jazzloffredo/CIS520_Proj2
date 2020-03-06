@@ -456,22 +456,26 @@ setup_stack (void **esp, const char *cmdline_copy)
             - https://static1.squarespace.com/static/5b18aa0955b02c1de94e4412/t/5b85fad2f950b7b16b7a2ed6/1535507195196/Pintos+Guide          
             - https://github.com/Waqee/Pintos-Project-2/blob/master/src/userprog/syscall.c
         */
-        int argc = 0,i;
+        int num_of_cmd_args = 0;
+
         char *token, *save_ptr;
         for (token = strtok_r (cmdline_copy, " ", &save_ptr); token != NULL; token = strtok_r (NULL, " ", &save_ptr))
-          argc++;
+        {
+          num_of_cmd_args++;
+        }  
 
+        char *argv_stack_pointers[num_of_cmd_args];
+        for (int arg_index = 0, token = strtok_r (cmdline_copy, " ", &save_ptr); token != NULL; arg_index++, token = strtok_r (NULL, " ", &save_ptr))
+        {
+          /* Account for null byte. */
+          int required_alloc = strlen (token) + 1;
 
-        int *argv = calloc(argc,sizeof(int));
+          *esp -= required_alloc;
+          memcpy(*esp, token, required_alloc);
+          argv_stack_pointers[arg_index]= (char *)*esp;
+        }
 
-        for (token = strtok_r (cmdline_copy, " ", &save_ptr),i=0; token != NULL;
-          token = strtok_r (NULL, " ", &save_ptr),i++)
-          {
-            *esp -= strlen(token) + 1;
-            memcpy(*esp,token,strlen(token) + 1);
-
-            argv[i]=*esp;
-          }
+        // MODIFIED UP TO THIS POINT
 
         while((int)*esp%4!=0)
         {
@@ -484,11 +488,11 @@ setup_stack (void **esp, const char *cmdline_copy)
 
         *esp-=sizeof(int);
         memcpy(*esp,&zero,sizeof(int));
-
-        for(i=argc-1;i>=0;i--)
+        int i;
+        for(i=num_of_cmd_args-1;i>=0;i--)
         {
           *esp-=sizeof(int);
-          memcpy(*esp,&argv[i],sizeof(int));
+          memcpy(*esp,&argv_stack_pointers[i],sizeof(int));
         }
 
         int pt = *esp;
@@ -496,12 +500,10 @@ setup_stack (void **esp, const char *cmdline_copy)
         memcpy(*esp,&pt,sizeof(int));
 
         *esp-=sizeof(int);
-        memcpy(*esp,&argc,sizeof(int));
+        memcpy(*esp,&num_of_cmd_args,sizeof(int));
 
         *esp-=sizeof(int);
         memcpy(*esp,&zero,sizeof(int));
-
-        free(argv);
       }
       else
         palloc_free_page (kpage);
