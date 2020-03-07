@@ -29,25 +29,31 @@ static bool load (const char *cmdline, void (**eip) (void), void **esp);
 tid_t
 process_execute (const char *cmdline) 
 {
+  struct thread * cur = thread_current();
+
   char *cmdline_copy;
   tid_t tid;
 
-  struct thread * cur = thread_current();
-
-
-  /* Make a copy of FILE_NAME.
+  /* Make a copy of CMDLINE.
      Otherwise there's a race between the caller and load(). */
   cmdline_copy = palloc_get_page (0);
   if (cmdline_copy == NULL)
     return TID_ERROR;
   strlcpy (cmdline_copy, cmdline, PGSIZE);
 
+  /* Make a copy to tokenize. */
+  char *cmdline_exec_tok = malloc (sizeof(char) * (strlen (cmdline_copy) + 1));
+  strlcpy (cmdline_exec_tok, cmdline_copy, strlen (cmdline_copy) + 1);
+
   /* Get name of executable, ignoring arguments. */
   char *executable_name, *save_ptr;
-  executable_name = strtok_r (cmdline_copy, " ", &save_ptr);
+  executable_name = strtok_r (cmdline_exec_tok, " ", &save_ptr);
 
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (executable_name, PRI_DEFAULT, start_process, cmdline_copy);
+
+  /* Free malloc'd resources to avoid leakage. */
+  free (cmdline_exec_tok);
 
   cur->child_list[cur->child_size] = tid;
   cur->child_size++;
@@ -119,11 +125,10 @@ process_wait (tid_t child_tid UNUSED)
         
     if (is_child && t != NULL && t->status != THREAD_DYING && t->tid != -1)
     {
-        printf("Before sema");
         sema_down(&t->waiting_sema);
-        printf("After sema");
         return t->status; //Not sure 
     }
+
     return -1;
 }
 
@@ -251,9 +256,13 @@ load (const char *cmdline_copy, void (**eip) (void), void **esp)
   bool success = false;
   int i;
 
+  /* Make a copy to tokenize. */
+  char *cmdline_exec_tok = malloc (sizeof(char) * (strlen (cmdline_copy) + 1));
+  strlcpy (cmdline_exec_tok, cmdline_copy, strlen (cmdline_copy) + 1);
+
   /* Get name of executable, ignoring arguments. */
   char *executable_name, *save_ptr;
-  executable_name = strtok_r (cmdline_copy, " ", &save_ptr);
+  executable_name = strtok_r (cmdline_exec_tok, " ", &save_ptr);
 
   /* Allocate and activate page directory. */
   t->pagedir = pagedir_create ();
@@ -281,6 +290,9 @@ load (const char *cmdline_copy, void (**eip) (void), void **esp)
       printf ("load: %s: error loading executable\n", executable_name);
       goto done; 
     }
+
+  /* Free malloc'd resources to avoid leakage. */
+  free (cmdline_exec_tok);
 
   /* Read program headers. */
   file_ofs = ehdr.e_phoff;
@@ -489,52 +501,65 @@ setup_stack (void **esp, const char *cmdline_copy)
         */
         int num_of_cmd_args = 0;
 
+        /* Make a copy to tokenize. */
+        char *cmdline_count_tok = malloc (sizeof(char) * (strlen (cmdline_copy) + 1));
+        strlcpy (cmdline_count_tok, cmdline_copy, strlen (cmdline_copy) + 1);
+
+        /* Count number of args (argc). */
+        
         char *token, *save_ptr;
-        for (token = strtok_r (cmdline_copy, " ", &save_ptr); token != NULL; token = strtok_r (NULL, " ", &save_ptr))
+        for (token = strtok_r (cmdline_count_tok, " ", &save_ptr); token != NULL; token = strtok_r (NULL, " ", &save_ptr))
         {
           num_of_cmd_args++;
-        }  
+        }
 
+        /* Free malloc'd resources to avoid leakage. */
+        free (cmdline_count_tok);
+
+        /* Split command line arguments and push onto stack. */
+        int arg_index;
         char *argv_stack_pointers[num_of_cmd_args];
-        for (int arg_index = 0, token = strtok_r (cmdline_copy, " ", &save_ptr); token != NULL; arg_index++, token = strtok_r (NULL, " ", &save_ptr))
+        for (arg_index = 0, token = strtok_r (cmdline_copy, " ", &save_ptr); token != NULL; arg_index++, token = strtok_r (NULL, " ", &save_ptr))
         {
           /* Account for null byte. */
           int required_alloc = strlen (token) + 1;
 
           *esp -= required_alloc;
-          memcpy(*esp, token, required_alloc);
-          argv_stack_pointers[arg_index]= (char *)*esp;
+          memcpy (*esp, token, required_alloc);
+          argv_stack_pointers[arg_index]= *esp;
         }
 
-        // MODIFIED UP TO THIS POINT
-
-        while((int)*esp%4!=0)
+        /* Word align stack pointer for increased memory access efficiency. */
+        int word_align = (size_t)*esp % 4;
+        if (word_align != 0)
         {
-          *esp-=sizeof(char);
-          char x = 0;
-          memcpy(*esp,&x,sizeof(char));
+          *esp -= word_align; 
+          memset (*esp, 0, word_align);
         }
 
-        int zero = 0;
+        /* Write last argument, consists of four bytes of zeros. */
+        *esp -= sizeof(int);
+        memset (*esp, 0, sizeof(int));
 
-        *esp-=sizeof(int);
-        memcpy(*esp,&zero,sizeof(int));
-        int i;
-        for(i=num_of_cmd_args-1;i>=0;i--)
+        /* Write addresses pointing to each of the arguments. */
+        for (arg_index = num_of_cmd_args - 1; arg_index >= 0 ; arg_index--)
         {
-          *esp-=sizeof(int);
-          memcpy(*esp,&argv_stack_pointers[i],sizeof(int));
+          *esp -= sizeof(char *);
+          memcpy(*esp, &argv_stack_pointers[arg_index], sizeof(char *));
         }
 
-        int pt = *esp;
-        *esp-=sizeof(int);
-        memcpy(*esp,&pt,sizeof(int));
+        /* Write the address of argv[0]. */
+        char **argv_zero = *esp; 
+        *esp -= sizeof(char **);
+        memcpy(*esp, &argv_zero, sizeof(char **));
 
-        *esp-=sizeof(int);
-        memcpy(*esp,&num_of_cmd_args,sizeof(int));
+        /* Write the number of command line arguments. */
+        *esp -= sizeof(int);
+        memcpy(*esp, &num_of_cmd_args, sizeof(int));
 
-        *esp-=sizeof(int);
-        memcpy(*esp,&zero,sizeof(int));
+        /* Write a fake return address. */
+        *esp -= sizeof(void *);
+        memset (*esp, 0, sizeof(void *));
       }
       else
         palloc_free_page (kpage);
