@@ -111,12 +111,14 @@ struct thread
     unsigned magic;                     /* Detects stack overflow. */
   };
 
+#ifdef USERPROG
 struct thread_open_file
    {
       struct list_elem elem;
       int fd;
       void *file;
    };
+#endif
 
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
