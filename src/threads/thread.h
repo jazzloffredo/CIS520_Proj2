@@ -99,7 +99,9 @@ struct thread
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
-    struct thread *parent;              /* Pointer to parent process. */
+    //struct thread *parent;            /* Pointer to parent process. */
+    tid_t child_list[100];              /* A list of threads current children threads*/
+    int child_size;                     /* Keeps track of where to put child in array*/
     struct semaphore waiting_sema;      /* Process wait for child. */
     struct list open_files;             /* A list of struct thread_open_file. */ 
     int fd_counter;                     /* Seed generator for files. */
@@ -143,6 +145,8 @@ void thread_yield (void);
 /* Performs some operation on thread t, given auxiliary data AUX. */
 typedef void thread_action_func (struct thread *t, void *aux);
 void thread_foreach (thread_action_func *, void *);
+
+struct thread* get_thread(tid_t tid);
 
 int thread_get_priority (void);
 void thread_set_priority (int);

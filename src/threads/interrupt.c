@@ -373,7 +373,6 @@ intr_handler (struct intr_frame *frame)
     }
   else
     unexpected_interrupt (frame);
-
   /* Complete the processing of an external interrupt. */
   if (external) 
     {

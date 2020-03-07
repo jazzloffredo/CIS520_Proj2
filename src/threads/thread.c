@@ -71,6 +71,7 @@ static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
 
+
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
    general and it is possible in this case only because loader.S
@@ -92,7 +93,6 @@ thread_init (void)
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
-
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
   init_thread (initial_thread, "main", PRI_DEFAULT);
@@ -283,7 +283,6 @@ thread_exit (void)
   ASSERT (!intr_context ());
 
 #ifdef USERPROG
-  sema_up (&thread_current ()->parent->waiting_sema);
   process_exit ();
 #endif
 
@@ -291,6 +290,7 @@ thread_exit (void)
      and schedule another process.  That process will destroy us
      when it calls thread_schedule_tail(). */
   intr_disable ();
+  sema_up (&thread_current()->waiting_sema);
   list_remove (&thread_current()->allelem);
   thread_current ()->status = THREAD_DYING;
   schedule ();
@@ -330,6 +330,23 @@ thread_foreach (thread_action_func *func, void *aux)
       struct thread *t = list_entry (e, struct thread, allelem);
       func (t, aux);
     }
+}
+
+/*Retrieved from https://bitbucket.org/eardic/pintos-project-2/src/master/userprog/process.c
+  used to find child thread in userprog/process.c -> process_wait*/
+struct thread* get_thread(tid_t tid)
+{
+    struct list_elem *e;
+    for (e = list_begin (&all_list); 
+         e != list_end (&all_list);
+         e = list_next (e))
+    {
+      struct thread *t = list_entry (e, struct thread, allelem);
+      if( t != NULL && t->tid == tid){
+          return t;
+      }
+    }    
+    return NULL;
 }
 
 /* Sets the current thread's priority to NEW_PRIORITY. */
@@ -457,6 +474,11 @@ init_thread (struct thread *t, const char *name, int priority)
   ASSERT (t != NULL);
   ASSERT (PRI_MIN <= priority && priority <= PRI_MAX);
   ASSERT (name != NULL);
+  
+  int i=0;
+  t->child_size = 0;
+  for(i=0;i<100;++i)
+    t->child_list[i] = 0;
 
   memset (t, 0, sizeof *t);
   t->status = THREAD_BLOCKED;

@@ -32,6 +32,9 @@ process_execute (const char *cmdline)
   char *cmdline_copy;
   tid_t tid;
 
+  struct thread * cur = thread_current();
+
+
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
   cmdline_copy = palloc_get_page (0);
@@ -45,6 +48,9 @@ process_execute (const char *cmdline)
 
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (executable_name, PRI_DEFAULT, start_process, cmdline_copy);
+
+  cur->child_list[cur->child_size] = tid;
+  cur->child_size++;
   if (tid == TID_ERROR)
     palloc_free_page (cmdline_copy); 
   return tid;
@@ -90,10 +96,35 @@ start_process (void *cmdline_copy_)
 
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
+
+/*Retrieved from https://bitbucket.org/eardic/pintos-project-2/src/master/userprog/process.c
+  loops through and sees if the process we are waiting on is a child thread of current and returns
+  accordingly */
 int
 process_wait (tid_t child_tid UNUSED) 
 {
-  sema_down (&thread_current ()->waiting_sema);
+    struct thread *t = NULL, *cur = thread_current();
+    int i = 0;
+    bool is_child = false;
+
+    t = get_thread(child_tid);
+        
+    for (i = 0; i < cur->child_size; ++i)
+    {
+        if (child_tid == cur->child_list[i])
+        {
+            is_child = true;
+        }
+    }
+        
+    if (is_child && t != NULL && t->status != THREAD_DYING && t->tid != -1)
+    {
+        printf("Before sema");
+        sema_down(&t->waiting_sema);
+        printf("After sema");
+        return t->status; //Not sure 
+    }
+    return -1;
 }
 
 /* Free the current process's resources. */
