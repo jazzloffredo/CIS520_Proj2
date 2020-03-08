@@ -29,7 +29,7 @@ static bool load (const char *cmdline, void (**eip) (void), void **esp);
 tid_t
 process_execute (const char *cmdline) 
 {
-  struct thread * cur = thread_current();
+  struct thread *cur = thread_current();
 
   char *cmdline_copy;
   tid_t tid;
@@ -55,10 +55,19 @@ process_execute (const char *cmdline)
   /* Free malloc'd resources to avoid leakage. */
   free (cmdline_exec_tok);
 
-  cur->child_list[cur->child_size] = tid;
-  cur->child_size++;
+  /* Created invalid thread. */
   if (tid == TID_ERROR)
+  {
     palloc_free_page (cmdline_copy); 
+  }
+  /* Created valid thread. */
+  else
+  {
+    current_tid = tid;
+    thread_foreach(*find_tid, NULL);
+    list_push_front(&thread_current()->children, &matching_thread->child_elem);
+  }
+  
   return tid;
 }
 
@@ -102,33 +111,11 @@ start_process (void *cmdline_copy_)
 
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
-
-/*Retrieved from https://bitbucket.org/eardic/pintos-project-2/src/master/userprog/process.c
-  loops through and sees if the process we are waiting on is a child thread of current and returns
-  accordingly */
 int
 process_wait (tid_t child_tid UNUSED) 
 {
-    struct thread *t = NULL, *cur = thread_current();
-    int i = 0;
-    bool is_child = false;
-
-    t = get_thread(child_tid);
-        
-    for (i = 0; i < cur->child_size; ++i)
-    {
-        if (child_tid == cur->child_list[i])
-        {
-            is_child = true;
-        }
-    }
-        
-    if (is_child && t != NULL && t->status != THREAD_DYING && t->tid != -1)
-    {
-        sema_down(&t->waiting_sema);
-        return t->status; //Not sure 
-    }
-
+    struct thread *cur = thread_current();
+    sema_down(&cur->child_wait_sema);
     return -1;
 }
 

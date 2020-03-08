@@ -1,6 +1,7 @@
 #include "userprog/syscall.h"
 #include <stdio.h>
 #include <syscall-nr.h>
+#include "devices/input.h"
 #include "threads/init.h"
 #include "threads/interrupt.h"
 #include "threads/malloc.h"
@@ -16,8 +17,15 @@
 /* Lock for syscalls dealing with critical sections of files. */
 struct lock file_lock;
 
+/* Lock for syscalls dealing with reading/writing from system. */
+struct lock sys_lock;
+
+/* Lock for adding to threads child process list. */
+struct lock child_process_lock;
+
 static void syscall_handler (struct intr_frame *);
 static struct thread_open_file *find_thread_open_file (int);
+static struct thread *find_child_thread (pid_t);
 static bool is_page_mapped (void *);
 static void check_valid_user_vaddr (const void *);
 static void check_valid_buffer (void *, unsigned);
@@ -26,13 +34,14 @@ void
 syscall_init (void) 
 {
   intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
-  lock_init(&file_lock);
+  lock_init (&file_lock);
+  lock_init (&sys_lock);
 }
 
 static void
 syscall_handler (struct intr_frame *f UNUSED) 
 {  
-  check_valid_user_vaddr (f->esp);
+  check_valid_user_vaddr ((void *)((int *)f->esp + 1));
 
   /*
     Acts on various syscalls. Calls appropriate function. Extracts and passes args.
@@ -49,28 +58,28 @@ syscall_handler (struct intr_frame *f UNUSED)
     }
     case SYS_EXIT:
     {
-      check_valid_user_vaddr ((int *)f->esp + 1);
+      check_valid_user_vaddr ((int *)f->esp + 2);
       int status = *((int *)f->esp + 1);
       exit (status);
       break;
     }
     case SYS_EXEC:
     {
-      check_valid_user_vaddr ((int *)f->esp + 1);
+      check_valid_user_vaddr ((int *)f->esp + 2);
       void *cmd_line = (void *)(*((int*)f->esp + 1));
       f->eax = exec((const char *)cmd_line);
       break;
     }
     case SYS_WAIT:
     {
-      check_valid_user_vaddr ((int *)f->esp + 1);
+      check_valid_user_vaddr ((int *)f->esp + 2);
       int p_id = *((int *)f->esp + 1);
       f->eax = wait(p_id);
       break;
     }
     case SYS_CREATE:
     {
-      check_valid_user_vaddr ((int *)f->esp + 2);
+      check_valid_user_vaddr ((int *)f->esp + 3);
       void *file = (void *)(*((int*)f->esp + 1));
       unsigned initial_size = *((unsigned *)f->esp + 2);
       f->eax = create((const char *)file, initial_size);
@@ -78,38 +87,38 @@ syscall_handler (struct intr_frame *f UNUSED)
     }
     case SYS_REMOVE:
     {
-      check_valid_user_vaddr ((int *)f->esp + 1);
+      check_valid_user_vaddr ((int *)f->esp + 2);
       void *file = (void *)(*((int*)f->esp + 1));
       f->eax = remove(file);
       break;
     }
     case SYS_OPEN:
     {
-      check_valid_user_vaddr ((int *)f->esp + 1);
+      check_valid_user_vaddr ((int *)f->esp + 2);
       void *file = (void *)(*((int*)f->esp + 1));
       f->eax = open((const char *)file);
       break;
     }
     case SYS_FILESIZE:
     {
-      check_valid_user_vaddr ((int *)f->esp + 1);
+      check_valid_user_vaddr ((int *)f->esp + 2);
       int fd = *((int *)f->esp + 1);
       f->eax = filesize(fd);
       break;
     }
     case SYS_READ:
     {
-      check_valid_user_vaddr ((int *)f->esp + 3);
+      check_valid_user_vaddr ((int *)f->esp + 4);
       int fd = *((int *)f->esp + 1);
       void *buffer = (void *)(*((int*)f->esp + 2));
       unsigned size = *((unsigned *)f->esp + 3);
-      check_valid_buffer (buffer, size);      
-      f->eax = read(fd, buffer, size);
+      check_valid_buffer (buffer, size);
+      f->eax = read (fd, buffer, size);
       break;
     }
     case SYS_WRITE:
     {
-      check_valid_user_vaddr ((int *)f->esp + 3);
+      check_valid_user_vaddr ((int *)f->esp + 4);
       int fd = *((int *)f->esp + 1);
       void *buffer = (void *)(*((int*)f->esp + 2));
       unsigned size = *((unsigned *)f->esp + 3);
@@ -119,7 +128,7 @@ syscall_handler (struct intr_frame *f UNUSED)
     }
     case SYS_SEEK:
     {
-      check_valid_user_vaddr ((int *)f->esp + 2);
+      check_valid_user_vaddr ((int *)f->esp + 3);
       int fd = *((int *)f->esp + 1);
       unsigned position = *((unsigned *)f->esp + 2);
       seek(fd, position);
@@ -127,14 +136,14 @@ syscall_handler (struct intr_frame *f UNUSED)
     }
     case SYS_TELL:
     {
-      check_valid_user_vaddr ((int *)f->esp + 1);
+      check_valid_user_vaddr ((int *)f->esp + 2);
       int fd = *((int *)f->esp + 1);
       f->eax = tell(fd);
       break;
     }
     case SYS_CLOSE:
     {
-      check_valid_user_vaddr ((int *)f->esp + 1);
+      check_valid_user_vaddr ((int *)f->esp + 2);
       int fd = *((int *)f->esp + 1);
       close(fd);
       break;
@@ -155,21 +164,24 @@ halt (void)
 void
 exit (int status)
 {
-  struct thread *cur = thread_current();
-  printf("%s: exit(%d)\n", cur->name, status);
-  thread_exit();
+  struct thread *cur = thread_current ();
+  cur->exit_status = status;
+  printf ("%s: exit(%d)\n", cur->name, status);
+  thread_exit ();
 }
 
 pid_t
 exec (const char *cmd_line)
 {
-
+  if (cmd_line == NULL)
+    return -1;
+  return process_execute (cmd_line);
 }
 
 int
 wait (pid_t pid)
 {
-
+  return process_wait (pid);
 }
 
 /*
@@ -184,7 +196,9 @@ create (const char *file, unsigned initial_size)
     exit (-1);
 
   lock_acquire(&file_lock);
-  bool create_successful = filesys_create(file, initial_size);
+
+    bool create_successful = filesys_create(file, initial_size);
+
   lock_release(&file_lock);
 
   return create_successful;
@@ -199,12 +213,13 @@ bool
 remove (const char *file)
 {
   lock_acquire(&file_lock);
-  bool remove_successful = filesys_remove(file);
+
+    bool remove_successful = filesys_remove(file);
+
   lock_release(&file_lock);
 
   return remove_successful;
 }
-
 
 int
 open (const char *file)
@@ -238,31 +253,40 @@ int
 filesize (int fd)
 {
   lock_acquire (&file_lock);
-  struct thread_open_file *tof = find_thread_open_file (fd);
-  struct file *f = (struct file *)(tof->file);
-  if (f != NULL)
-  {
-    lock_release (&file_lock);
-    return -1;
-  }
-  else
-  {
-    int file_size = (int)file_length (f);
-    lock_release (&file_lock);
-    return file_size;
-  }
+
+    struct thread_open_file *tof = find_thread_open_file (fd);
+    if (tof == NULL)
+      return -1;
+    struct file *f = (struct file *)(tof->file);
+    int file_size = file_length (f);
+  
+  lock_release (&file_lock);
+
+  return file_size;
 }
 
 int
 read (int fd, void *buffer, unsigned size)
 {
-  /* Read from STDIN. */
-  if (fd == STDIN_FILENO)
-    return (int)input_getc ();
-
   /* Cannot read from STDOUT. */
   if (fd == STDOUT_FILENO)
     return 0;
+
+  /* Read from STDIN. */
+  if (fd == STDIN_FILENO)
+  {
+    lock_acquire (&sys_lock);
+
+      uint8_t *buff_ptr = (uint8_t *)buffer;
+      for(unsigned i = 0; i < size; i++)
+      {
+        buff_ptr[i] = input_getc();
+      }
+
+    lock_release (&sys_lock);
+
+		return size;
+  }
 
   lock_acquire (&file_lock);
 
@@ -270,9 +294,11 @@ read (int fd, void *buffer, unsigned size)
     if (tof == NULL)
       exit (-1);
     struct file *f = (struct file *)(tof->file);
-    int bytes_read = (int)file_read (f, buffer, (off_t)size);
+    int bytes_read = file_read (f, buffer, size);
   
   lock_release (&file_lock);
+
+  return bytes_read;
 }
 
 int
@@ -368,9 +394,7 @@ find_thread_open_file (int fd)
 static bool
 is_page_mapped (void *check_vaddr)
 {
-  void *ptr;
-
-  ptr = pagedir_get_page (thread_current ()->pagedir, check_vaddr);
+  void *ptr = pagedir_get_page (thread_current ()->pagedir, check_vaddr);
 
   if (ptr == NULL)
     return false;
@@ -382,9 +406,9 @@ is_page_mapped (void *check_vaddr)
 static void
 check_valid_user_vaddr (const void *check_vaddr)
 {
-  if (check_vaddr == NULL               || 
-      check_vaddr < (void *)0x08048000  || 
-      !is_user_vaddr (check_vaddr)      || 
+  if (check_vaddr == NULL                 || 
+      check_vaddr < ((void *)0x08048000)  || 
+      !is_user_vaddr (check_vaddr)        || 
       !is_page_mapped(check_vaddr))
   {
     exit (-1);

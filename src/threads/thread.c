@@ -268,6 +268,22 @@ thread_current (void)
   return t;
 }
 
+/* Returns the thread with TID if it exists.
+   Otherwise, returns NULL. */
+struct thread *
+thread_search (tid_t tid)
+{
+  struct list_elem *e;
+  for (e = list_begin (&all_list); e != list_end (&all_list); e = list_next (e))
+  {
+    struct thread *check = list_entry (e, struct thread, elem);
+    if (check->tid == tid)
+      return check;
+  }
+
+  return NULL;
+}
+
 /* Returns the running thread's tid. */
 tid_t
 thread_tid (void) 
@@ -283,7 +299,7 @@ thread_exit (void)
   ASSERT (!intr_context ());
 
 #ifdef USERPROG
-  sema_up (&thread_current()->waiting_sema);
+  sema_up (&thread_current()->child_wait_sema);
   process_exit ();
 #endif
 
@@ -330,23 +346,6 @@ thread_foreach (thread_action_func *func, void *aux)
       struct thread *t = list_entry (e, struct thread, allelem);
       func (t, aux);
     }
-}
-
-/*Retrieved from https://bitbucket.org/eardic/pintos-project-2/src/master/userprog/process.c
-  used to find child thread in userprog/process.c -> process_wait*/
-struct thread* get_thread(tid_t tid)
-{
-    struct list_elem *e;
-    for (e = list_begin (&all_list); 
-         e != list_end (&all_list);
-         e = list_next (e))
-    {
-      struct thread *t = list_entry (e, struct thread, allelem);
-      if( t != NULL && t->tid == tid){
-          return t;
-      }
-    }    
-    return NULL;
 }
 
 /* Sets the current thread's priority to NEW_PRIORITY. */
@@ -474,11 +473,6 @@ init_thread (struct thread *t, const char *name, int priority)
   ASSERT (t != NULL);
   ASSERT (PRI_MIN <= priority && priority <= PRI_MAX);
   ASSERT (name != NULL);
-  
-  int i=0;
-  t->child_size = 0;
-  for(i=0;i<100;++i)
-    t->child_list[i] = 0;
 
   memset (t, 0, sizeof *t);
   t->status = THREAD_BLOCKED;
@@ -488,7 +482,9 @@ init_thread (struct thread *t, const char *name, int priority)
   t->magic = THREAD_MAGIC;
 
 #ifdef USERPROG
-  sema_init (&t->waiting_sema, 0);
+  t->parent = NULL;
+  list_init (&t->children);
+  t->exit_status = -1;
   list_init (&t->open_files);
   t->fd_counter = 2;
 #endif
