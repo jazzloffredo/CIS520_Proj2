@@ -183,16 +183,17 @@ thread_create (const char *name, int priority,
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
 
+  /* Set new thread's parent as current thread. */
+  t->parent = thread_current ();
+
   /* Create child and add it to current threads children list. */
-  struct thread_child *child = malloc(sizeof(struct thread_child));
-  child -> child_pid = t->tid;
-  child -> first_time = true;
-  child -> loaded_success = false;
-  child -> real_child = t;
-  child -> exit_status = INIT_STATUS;
-  child -> cur_status = STILL_ALIVE;
-  list_push_back(&thread_current()->children, &child->child_elem);
-  t->parent = thread_current();
+  struct thread_child *new_c = malloc (sizeof(struct thread_child));
+  new_c->child_thread = t;
+  new_c->tid = t->tid;
+  new_c->load_success = false;
+  new_c->has_been_waited_on = false;
+  new_c->exit_status = STILL_ALIVE;  
+  list_push_back (&thread_current()->children, &new_c->child_elem);
 
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame (t, sizeof *kf);
@@ -279,17 +280,17 @@ thread_current (void)
   return t;
 }
 
+/* Finds a child thread in a given list from child's TID.
+   Returns NULL if child does not exist in list. */
 struct thread_child *
 thread_get_child (struct list child_list, tid_t child_tid)
 {
   struct list_elem *e;
   for (e = list_begin (&child_list); e != list_end (&child_list); e = list_next (e))
-  {
+  { 
     struct thread_child *child = list_entry (e, struct thread_child, child_elem);
-    if(child -> child_pid == child_tid)
-    {
+    if(child->tid == child_tid)
       return child;
-    }
   }
 
   return NULL;
@@ -493,10 +494,11 @@ init_thread (struct thread *t, const char *name, int priority)
 
 #ifdef USERPROG
   list_init(&t->children);
-  sema_init(&t->sema_load, 0);
-  sema_init(&t->sema_wait, 0);
+  sema_init(&t->load_sema, 0);
+  sema_init(&t->exec_sema, 0);
   t->parent = NULL;
   list_init (&t->open_files);
+  t->executable_file = NULL;
   t->fd_counter = 2;
 #endif
 

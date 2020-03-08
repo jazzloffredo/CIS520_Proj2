@@ -26,6 +26,8 @@ static struct thread_open_file *find_thread_open_file (int);
 static bool is_page_mapped (void *);
 static void check_valid_user_vaddr (const void *);
 static void check_valid_buffer (void *, unsigned);
+static void free_children (struct list *);
+static void close_all_files (struct list *);
 
 void
 syscall_init (void) 
@@ -64,6 +66,7 @@ syscall_handler (struct intr_frame *f UNUSED)
     {
       check_valid_user_vaddr ((int *)f->esp + 2);
       void *cmd_line = (void *)(*((int*)f->esp + 1));
+      check_valid_buffer (cmd_line, sizeof(cmd_line));
       f->eax = exec((const char *)cmd_line);
       break;
     }
@@ -167,14 +170,15 @@ exit (int status)
   printf ("%s: exit(%d)\n", cur->name, status);
 
   /* Grab the thread_child from parents children list. */
-  struct thread_child *child = thread_get_child (cur->parent->children, cur->tid);
-  child -> exit_status = status;
-  if (status == -1)
-    child -> cur_status = WAS_KILLED;
-  else
-    child -> cur_status = HAD_EXITED;
+  struct thread_child *c = thread_get_child (cur->parent->children, cur->tid);
+
+  /* About to exit, update status. */
+  c->exit_status = status;
 
   thread_exit();
+
+  /* No longer a child of parent. */
+  list_remove (&c->child_elem);
 }
 
 pid_t
@@ -186,13 +190,13 @@ exec (const char *cmd_line)
   pid_t pid = process_execute(cmd_line);
 
   /* Get the child thread after it has either completely or partially executed. */
-  struct thread_child *child = thread_get_child(parent->children, pid);
+  struct thread_child *c = thread_get_child(parent->children, pid);
 
-  /* Wake up the parent waiting on load. */
-  sema_down(&child->real_child->sema_load);
+  /* Put parent to sleep while child attempts to load. */
+  sema_down(&c->child_thread->load_sema);
 
   /* Return -1 if child did not load correctly. Otherwise, just return PID from execution. */
-  if(!child->loaded_success)
+  if(!c->load_success)
     return -1;
   return pid;
 }
@@ -260,7 +264,8 @@ open (const char *file)
     struct thread_open_file *new_file = malloc (sizeof(struct thread_open_file));
     new_file->fd = cur_fd;
     new_file->file = f;
-    list_push_front(&thread_current ()->open_files, &new_file->elem);
+    new_file->is_executable = false;
+    list_push_back(&thread_current ()->open_files, &new_file->elem);
     thread_current ()->fd_counter += 1;
 
     lock_release (&file_lock);
@@ -276,7 +281,7 @@ filesize (int fd)
     struct thread_open_file *tof = find_thread_open_file (fd);
     if (tof == NULL)
       return -1;
-    struct file *f = (struct file *)(tof->file);
+    struct file *f = tof->file;
     int file_size = file_length (f);
   
   lock_release (&file_lock);
@@ -312,7 +317,7 @@ read (int fd, void *buffer, unsigned size)
     struct thread_open_file *tof = find_thread_open_file (fd);
     if (tof == NULL)
       exit (-1);
-    struct file *f = (struct file *)(tof->file);
+    struct file *f = tof->file;
     int bytes_read = file_read (f, buffer, size);
   
   lock_release (&file_lock);
@@ -339,9 +344,11 @@ write (int fd, const void *buffer, unsigned size)
     struct thread_open_file *tof = find_thread_open_file (fd);
     if (tof == NULL)
       exit (-1);
-    struct file *f = (struct file *)(tof->file);
-    // TODO: Deny write to executable files.
-    int bytes_written = (int)file_write (f, buffer, (off_t)size);
+    
+    /* Only write to non-executables. */
+    int bytes_written = 0;
+    if (!tof->is_executable)
+      bytes_written = (int)file_write (tof->file, buffer, (off_t)size);
 
   lock_release (&file_lock);
   return bytes_written;
@@ -354,7 +361,7 @@ seek (int fd, unsigned position)
   struct thread_open_file *tof = find_thread_open_file (fd);
   if (tof != NULL)
   {
-    struct file *f = (struct file *)(tof->file);
+    struct file *f = tof->file;
     file_seek (f, position);
   }
   lock_release (&file_lock);
@@ -367,7 +374,7 @@ tell (int fd)
   struct thread_open_file *tof = find_thread_open_file (fd);
   if (tof != NULL)
   {
-    struct file *f = (struct file *)(tof->file);
+    struct file *f = tof->file;
     unsigned position = file_tell (f);
     lock_release (&file_lock);
     return position;
@@ -385,7 +392,7 @@ close (int fd)
   struct thread_open_file *tof = find_thread_open_file (fd);
   if (tof != NULL)
   {
-    file_close ((struct file *)(tof->file));
+    file_close (tof->file);
     list_remove (&tof->elem);
     free (tof);
   }
@@ -447,5 +454,30 @@ check_valid_buffer (void *buffer, unsigned size)
   {
     check_valid_user_vaddr (buff_ptr);
     buff_ptr += 1;
+  }
+}
+
+/* Free all children for a given process. */
+static void
+free_children (struct list *child_list)
+{
+  struct list_elem *e;
+  for (e = list_begin (child_list); e != list_end (child_list); e = list_next (e))
+  {
+    struct thread_child *c = list_entry(e, struct thread_child, child_elem);
+    list_remove (e);
+    free (c);
+  }
+}
+
+static void
+close_all_files (struct list *open_files)
+{
+  struct list_elem *e;
+  for (e = list_begin (open_files); e != list_end (open_files); e = list_next (e))
+  {
+    struct thread_open_file *tof = list_entry(e, struct thread_open_file, elem);
+    close (tof->fd);
+    free (tof);
   }
 }

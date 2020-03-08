@@ -19,7 +19,6 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 
-void free_children(struct list *child_list);
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
 
@@ -30,8 +29,6 @@ static bool load (const char *cmdline, void (**eip) (void), void **esp);
 tid_t
 process_execute (const char *cmdline) 
 {
-  struct thread *cur = thread_current();
-
   char *cmdline_copy;
   tid_t tid;
 
@@ -67,6 +64,7 @@ process_execute (const char *cmdline)
 static void
 start_process (void *cmdline_copy_)
 {
+  struct thread *cur = thread_current ();
   char *cmdline_copy = cmdline_copy_;
   struct intr_frame if_;
   bool success;
@@ -78,16 +76,13 @@ start_process (void *cmdline_copy_)
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (cmdline_copy, &if_.eip, &if_.esp);
 
-    // if this thread have a parent
-    if(thread_current()->parent != NULL)
-    {
-        // get this thread as a child
-        struct thread_child *child = thread_get_child(thread_current()->parent->children, thread_current() -> tid);
-        // setting the load status
-        child ->loaded_success = success;
-    }
-    // wake up my parent which wait me to load successfully
-    sema_up(&thread_current() -> sema_load);
+  /* If thread has a parent, then parent was waiting for child to load. */
+  if(thread_current ()->parent != NULL)
+  {
+    struct thread_child *child = thread_get_child(cur->parent->children, cur->tid);
+    child ->load_success = success;
+    sema_up (&thread_current ()->load_sema);
+  }
 
   /* If load failed, quit. */
   palloc_free_page (cmdline_copy);
@@ -116,23 +111,17 @@ start_process (void *cmdline_copy_)
 int
 process_wait (tid_t child_tid UNUSED) 
 {
-    //get my child which have this tid
-    struct thread_child *child = thread_get_child(thread_current()->children, child_tid);
-    // check if this is the 1st call of child
-    if(child -> first_time)
-    {
-        //mark that child was called before
-        child -> first_time = false;
-        //check if this child is still alive
-        if(child -> cur_status == STILL_ALIVE)
-        {
-            // make the current thread wait this child
-            sema_down(&(child -> real_child -> sema_wait));
-        }
-        //after wake up, return the exit status
-        return child-> exit_status;
-    }
+  struct thread_child *c = thread_get_child (thread_current ()->children, child_tid);
+
+  /* Cannot wait on the same child twice. */
+  if(c == NULL || c->has_been_waited_on)
     return -1;
+
+  c->has_been_waited_on = true;
+  if(c->exit_status == STILL_ALIVE)
+    sema_down (&c->child_thread->exec_sema);
+  
+  return c->exit_status;
 }
 
 /* Free the current process's resources. */
@@ -142,28 +131,11 @@ process_exit (void)
   struct thread *cur = thread_current ();
   uint32_t *pd;
 
-    // if this thread have a parent
-    if(thread_current()->parent != NULL)
-    {
-        // get this thread as a child
-        struct thread_child *child = thread_get_child(thread_current()->parent->children, thread_current() -> tid);
-        // if this thread is still alive
-        if(child -> cur_status == 2)
-        {
-            // this thread had been killed
-            child -> cur_status = 0;
-            child -> exit_status = -1;
-        }
-    }
+  sema_up (&thread_current()->exec_sema);
 
-    // wake up my parent which wait my lock
-    sema_up(&thread_current()->sema_wait);
+  thread_current ()->parent = NULL;
 
-    //Free my Children
-    free_children(&thread_current()->children);
-
-    // lose my parent
-    thread_current()->parent = NULL;
+  file_close(cur->executable_file);
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
@@ -180,23 +152,6 @@ process_exit (void)
       cur->pagedir = NULL;
       pagedir_activate (NULL);
       pagedir_destroy (pd);
-    }
-}
-
-/**
-free all the children in the child_list
-*/
-void
-free_children(struct list *child_list)
-{
-    struct list_elem* e1 = list_begin(child_list);
-    while(e1!=list_end(child_list))
-    {
-        struct list_elem *next = list_next(e1);
-        struct thread_child *c = list_entry(e1, struct thread_child, child_elem);
-        list_remove(e1);
-        free(c);
-        e1 = next;
     }
 }
 
@@ -321,6 +276,9 @@ load (const char *cmdline_copy, void (**eip) (void), void **esp)
       goto done; 
     }
 
+  file_deny_write (file);
+  t->executable_file = file;
+
   /* Read and verify executable header. */
   if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
       || memcmp (ehdr.e_ident, "\177ELF\1\1\1", 7)
@@ -407,9 +365,6 @@ load (const char *cmdline_copy, void (**eip) (void), void **esp)
 
  done:
   /* We arrive here whether the load is successful or not. */
-  file_close (file);
-  if (file != NULL)
-    file_deny_write (file);
   return success;
 }
 
