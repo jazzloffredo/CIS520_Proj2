@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <syscall-nr.h>
 #include "devices/input.h"
+#include "devices/shutdown.h"
 #include "threads/init.h"
 #include "threads/interrupt.h"
 #include "threads/malloc.h"
@@ -15,17 +16,13 @@
 #include "userprog/process.h"
 
 /* Lock for syscalls dealing with critical sections of files. */
-struct lock file_lock;
+static struct lock file_lock;
 
 /* Lock for syscalls dealing with reading/writing from system. */
-struct lock sys_lock;
-
-/* Lock for adding to threads child process list. */
-struct lock child_process_lock;
+static struct lock sys_lock;
 
 static void syscall_handler (struct intr_frame *);
 static struct thread_open_file *find_thread_open_file (int);
-static struct thread *find_child_thread (pid_t);
 static bool is_page_mapped (void *);
 static void check_valid_user_vaddr (const void *);
 static void check_valid_buffer (void *, unsigned);
@@ -164,18 +161,40 @@ halt (void)
 void
 exit (int status)
 {
-  struct thread *cur = thread_current ();
-  cur->exit_status = status;
+  struct thread *cur = thread_current();
+
+  /* Print error status for tests. */
   printf ("%s: exit(%d)\n", cur->name, status);
-  thread_exit ();
+
+  /* Grab the thread_child from parents children list. */
+  struct thread_child *child = thread_get_child (cur->parent->children, cur->tid);
+  child -> exit_status = status;
+  if (status == -1)
+    child -> cur_status = WAS_KILLED;
+  else
+    child -> cur_status = HAD_EXITED;
+
+  thread_exit();
 }
 
 pid_t
 exec (const char *cmd_line)
 {
-  if (cmd_line == NULL)
+  struct thread *parent = thread_current();
+
+  /* Execute the new process. */
+  pid_t pid = process_execute(cmd_line);
+
+  /* Get the child thread after it has either completely or partially executed. */
+  struct thread_child *child = thread_get_child(parent->children, pid);
+
+  /* Wake up the parent waiting on load. */
+  sema_down(&child->real_child->sema_load);
+
+  /* Return -1 if child did not load correctly. Otherwise, just return PID from execution. */
+  if(!child->loaded_success)
     return -1;
-  return process_execute (cmd_line);
+  return pid;
 }
 
 int

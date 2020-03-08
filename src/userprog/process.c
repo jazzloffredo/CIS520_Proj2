@@ -19,6 +19,7 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 
+void free_children(struct list *child_list);
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
 
@@ -57,17 +58,7 @@ process_execute (const char *cmdline)
 
   /* Created invalid thread. */
   if (tid == TID_ERROR)
-  {
     palloc_free_page (cmdline_copy); 
-  }
-  /* Created valid thread. */
-  else
-  {
-    current_tid = tid;
-    thread_foreach(*find_tid, NULL);
-    list_push_front(&thread_current()->children, &matching_thread->child_elem);
-  }
-  
   return tid;
 }
 
@@ -86,6 +77,17 @@ start_process (void *cmdline_copy_)
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (cmdline_copy, &if_.eip, &if_.esp);
+
+    // if this thread have a parent
+    if(thread_current()->parent != NULL)
+    {
+        // get this thread as a child
+        struct thread_child *child = thread_get_child(thread_current()->parent->children, thread_current() -> tid);
+        // setting the load status
+        child ->loaded_success = success;
+    }
+    // wake up my parent which wait me to load successfully
+    sema_up(&thread_current() -> sema_load);
 
   /* If load failed, quit. */
   palloc_free_page (cmdline_copy);
@@ -114,8 +116,22 @@ start_process (void *cmdline_copy_)
 int
 process_wait (tid_t child_tid UNUSED) 
 {
-    struct thread *cur = thread_current();
-    sema_down(&cur->child_wait_sema);
+    //get my child which have this tid
+    struct thread_child *child = thread_get_child(thread_current()->children, child_tid);
+    // check if this is the 1st call of child
+    if(child -> first_time)
+    {
+        //mark that child was called before
+        child -> first_time = false;
+        //check if this child is still alive
+        if(child -> cur_status == STILL_ALIVE)
+        {
+            // make the current thread wait this child
+            sema_down(&(child -> real_child -> sema_wait));
+        }
+        //after wake up, return the exit status
+        return child-> exit_status;
+    }
     return -1;
 }
 
@@ -125,6 +141,29 @@ process_exit (void)
 {
   struct thread *cur = thread_current ();
   uint32_t *pd;
+
+    // if this thread have a parent
+    if(thread_current()->parent != NULL)
+    {
+        // get this thread as a child
+        struct thread_child *child = thread_get_child(thread_current()->parent->children, thread_current() -> tid);
+        // if this thread is still alive
+        if(child -> cur_status == 2)
+        {
+            // this thread had been killed
+            child -> cur_status = 0;
+            child -> exit_status = -1;
+        }
+    }
+
+    // wake up my parent which wait my lock
+    sema_up(&thread_current()->sema_wait);
+
+    //Free my Children
+    free_children(&thread_current()->children);
+
+    // lose my parent
+    thread_current()->parent = NULL;
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
@@ -141,6 +180,23 @@ process_exit (void)
       cur->pagedir = NULL;
       pagedir_activate (NULL);
       pagedir_destroy (pd);
+    }
+}
+
+/**
+free all the children in the child_list
+*/
+void
+free_children(struct list *child_list)
+{
+    struct list_elem* e1 = list_begin(child_list);
+    while(e1!=list_end(child_list))
+    {
+        struct list_elem *next = list_next(e1);
+        struct thread_child *c = list_entry(e1, struct thread_child, child_elem);
+        list_remove(e1);
+        free(c);
+        e1 = next;
     }
 }
 

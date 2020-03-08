@@ -27,6 +27,11 @@ typedef int tid_t;
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
 
+#define STILL_ALIVE 2                   /* thread still alive */
+#define WAS_KILLED 0                    /* thread was killed */
+#define HAD_EXITED 1                    /* thread had exited */
+#define INIT_STATUS -100            /* initial current status*/
+
 /* A kernel thread or user process.
 
    Each thread structure is stored in its own 4 kB page.  The
@@ -99,8 +104,10 @@ struct thread
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
-    struct list children;               /* A list of all the children to this thread. */
-    int exit_status;
+    struct semaphore sema_load;     /*parent wait child to load*/
+    struct semaphore sema_wait;     /*current thread wait pid child to exit*/
+    struct list children;         /*lsit of children this thread have*/
+    struct thread * parent;         /*pointer to this thread's dad*/
     struct list open_files;             /* A list of struct thread_open_file. */ 
     int fd_counter;                     /* Seed generator for files. */
 #endif
@@ -116,13 +123,16 @@ struct thread_open_file
       int fd;
       void *file;
    };
-
 struct thread_child
-   {
-      struct list_elem elem;
-      struct semaphore child_wait_sema;   /* Process wait for child. */
-      struct thread *child;
-   };
+{
+    struct list_elem child_elem;    /*list elem used to add in child_list */
+    struct thread * real_child;     /*pointer to the real thread child*/
+    int exit_status;                /*the status the child thread exit with*/
+    int cur_status;                 /*the child thread current status*/
+    int child_pid;                  /*pid of this child*/
+    bool first_time;                /*to check if wait() is called before?*/
+    bool loaded_success;            /*to check if load success*/
+};
 #endif
 
 /* If false (default), use round-robin scheduler.
@@ -143,7 +153,7 @@ void thread_block (void);
 void thread_unblock (struct thread *);
 
 struct thread *thread_current (void);
-struct thread *thread_search (tid_t);
+struct thread_child *thread_get_child (struct list, tid_t);
 tid_t thread_tid (void);
 const char *thread_name (void);
 

@@ -7,6 +7,7 @@
 #include "threads/flags.h"
 #include "threads/interrupt.h"
 #include "threads/intr-stubs.h"
+#include "threads/malloc.h"
 #include "threads/palloc.h"
 #include "threads/switch.h"
 #include "threads/synch.h"
@@ -70,7 +71,6 @@ static void *alloc_frame (struct thread *, size_t size);
 static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
-
 
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
@@ -183,6 +183,17 @@ thread_create (const char *name, int priority,
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
 
+  /* Create child and add it to current threads children list. */
+  struct thread_child *child = malloc(sizeof(struct thread_child));
+  child -> child_pid = t->tid;
+  child -> first_time = true;
+  child -> loaded_success = false;
+  child -> real_child = t;
+  child -> exit_status = INIT_STATUS;
+  child -> cur_status = STILL_ALIVE;
+  list_push_back(&thread_current()->children, &child->child_elem);
+  t->parent = thread_current();
+
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame (t, sizeof *kf);
   kf->eip = NULL;
@@ -268,17 +279,17 @@ thread_current (void)
   return t;
 }
 
-/* Returns the thread with TID if it exists.
-   Otherwise, returns NULL. */
-struct thread *
-thread_search (tid_t tid)
+struct thread_child *
+thread_get_child (struct list child_list, tid_t child_tid)
 {
   struct list_elem *e;
-  for (e = list_begin (&all_list); e != list_end (&all_list); e = list_next (e))
+  for (e = list_begin (&child_list); e != list_end (&child_list); e = list_next (e))
   {
-    struct thread *check = list_entry (e, struct thread, elem);
-    if (check->tid == tid)
-      return check;
+    struct thread_child *child = list_entry (e, struct thread_child, child_elem);
+    if(child -> child_pid == child_tid)
+    {
+      return child;
+    }
   }
 
   return NULL;
@@ -299,7 +310,6 @@ thread_exit (void)
   ASSERT (!intr_context ());
 
 #ifdef USERPROG
-  sema_up (&thread_current()->child_wait_sema);
   process_exit ();
 #endif
 
@@ -482,9 +492,10 @@ init_thread (struct thread *t, const char *name, int priority)
   t->magic = THREAD_MAGIC;
 
 #ifdef USERPROG
+  list_init(&t->children);
+  sema_init(&t->sema_load, 0);
+  sema_init(&t->sema_wait, 0);
   t->parent = NULL;
-  list_init (&t->children);
-  t->exit_status = -1;
   list_init (&t->open_files);
   t->fd_counter = 2;
 #endif
