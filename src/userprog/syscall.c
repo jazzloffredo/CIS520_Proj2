@@ -41,7 +41,6 @@ static void
 syscall_handler (struct intr_frame *f UNUSED) 
 {
   check_valid_user_vaddr ((void *)((int *)f->esp + 1));
-
   /*
     Acts on various syscalls. Calls appropriate function. Extracts and passes args.
     If function returns anything, value is stored in eax register.
