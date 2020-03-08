@@ -283,14 +283,17 @@ thread_current (void)
 /* Finds a child thread in a given list from child's TID.
    Returns NULL if child does not exist in list. */
 struct thread_child *
-thread_get_child (struct list child_list, tid_t child_tid)
+thread_get_child (struct list *child_list, tid_t child_tid)
 {
-  struct list_elem *e;
-  for (e = list_begin (&child_list); e != list_end (&child_list); e = list_next (e))
-  { 
-    struct thread_child *child = list_entry (e, struct thread_child, child_elem);
-    if(child->tid == child_tid)
-      return child;
+  if (!list_empty (child_list))
+  {
+    struct list_elem *e;   
+    for (e = list_begin (child_list); e != list_end (child_list); e = list_next (e))
+    { 
+      struct thread_child *child = list_entry (e, struct thread_child, child_elem);
+      if(child->tid == child_tid)
+        return child;
+    }
   }
 
   return NULL;

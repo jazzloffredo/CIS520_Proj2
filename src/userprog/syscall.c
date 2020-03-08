@@ -23,7 +23,7 @@ static struct lock sys_lock;
 
 static void syscall_handler (struct intr_frame *);
 static struct thread_open_file *find_thread_open_file (int);
-static bool is_page_mapped (void *);
+static inline bool is_page_mapped (void *);
 static void check_valid_user_vaddr (const void *);
 static void check_valid_buffer (void *, unsigned);
 static void free_children (struct list *);
@@ -39,7 +39,7 @@ syscall_init (void)
 
 static void
 syscall_handler (struct intr_frame *f UNUSED) 
-{  
+{
   check_valid_user_vaddr ((void *)((int *)f->esp + 1));
 
   /*
@@ -170,7 +170,7 @@ exit (int status)
   printf ("%s: exit(%d)\n", cur->name, status);
 
   /* Grab the thread_child from parents children list. */
-  struct thread_child *c = thread_get_child (cur->parent->children, cur->tid);
+  struct thread_child *c = thread_get_child (&cur->parent->children, cur->tid);
 
   /* About to exit, update status. */
   c->exit_status = status;
@@ -190,7 +190,7 @@ exec (const char *cmd_line)
   pid_t pid = process_execute(cmd_line);
 
   /* Get the child thread after it has either completely or partially executed. */
-  struct thread_child *c = thread_get_child(parent->children, pid);
+  struct thread_child *c = thread_get_child(&parent->children, pid);
 
   /* Put parent to sleep while child attempts to load. */
   sema_down(&c->child_thread->load_sema);
@@ -417,15 +417,10 @@ find_thread_open_file (int fd)
   return NULL;
 }
 
-static bool
+static inline bool
 is_page_mapped (void *check_vaddr)
 {
-  void *ptr = pagedir_get_page (thread_current ()->pagedir, check_vaddr);
-
-  if (ptr == NULL)
-    return false;
-  
-  return true;
+  return pagedir_get_page (thread_current ()->pagedir, check_vaddr) == NULL ? false: true;
 }
 
 /* Exits with error status if vaddr is invalid. */
@@ -433,7 +428,7 @@ static void
 check_valid_user_vaddr (const void *check_vaddr)
 {
   if (check_vaddr == NULL                 || 
-      check_vaddr < ((void *)0x08048000)  || 
+      check_vaddr < (void *)0x08048000    || 
       !is_user_vaddr (check_vaddr)        || 
       !is_page_mapped(check_vaddr))
   {
@@ -467,17 +462,5 @@ free_children (struct list *child_list)
     struct thread_child *c = list_entry(e, struct thread_child, child_elem);
     list_remove (e);
     free (c);
-  }
-}
-
-static void
-close_all_files (struct list *open_files)
-{
-  struct list_elem *e;
-  for (e = list_begin (open_files); e != list_end (open_files); e = list_next (e))
-  {
-    struct thread_open_file *tof = list_entry(e, struct thread_open_file, elem);
-    close (tof->fd);
-    free (tof);
   }
 }

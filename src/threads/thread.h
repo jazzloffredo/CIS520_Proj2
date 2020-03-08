@@ -155,7 +155,7 @@ void thread_block (void);
 void thread_unblock (struct thread *);
 
 struct thread *thread_current (void);
-struct thread_child *thread_get_child (struct list, tid_t);
+struct thread_child *thread_get_child (struct list *, tid_t);
 tid_t thread_tid (void);
 const char *thread_name (void);
 

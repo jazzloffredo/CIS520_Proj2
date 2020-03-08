@@ -76,18 +76,18 @@ start_process (void *cmdline_copy_)
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (cmdline_copy, &if_.eip, &if_.esp);
 
+  struct thread_child *child = thread_get_child (&cur->parent->children, cur->tid);
   /* If thread has a parent, then parent was waiting for child to load. */
-  if(thread_current ()->parent != NULL)
+  if(child != NULL)
   {
-    struct thread_child *child = thread_get_child(cur->parent->children, cur->tid);
-    child ->load_success = success;
+    child->load_success = success;
     sema_up (&thread_current ()->load_sema);
   }
 
   /* If load failed, quit. */
   palloc_free_page (cmdline_copy);
-  if (!success) 
-    thread_exit ();
+  if (!success)
+    thread_exit (); 
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -111,7 +111,7 @@ start_process (void *cmdline_copy_)
 int
 process_wait (tid_t child_tid UNUSED) 
 {
-  struct thread_child *c = thread_get_child (thread_current ()->children, child_tid);
+  struct thread_child *c = thread_get_child (&thread_current ()->children, child_tid);
 
   /* Cannot wait on the same child twice. */
   if(c == NULL || c->has_been_waited_on)
