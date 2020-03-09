@@ -123,7 +123,6 @@ struct thread_open_file
       struct list_elem elem;
       int fd;
       struct file *file;
-      bool is_executable;
    };
 
 struct thread_child

@@ -21,6 +21,8 @@
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
+static void process_free_children (struct list *);
+static void process_close_all_open_files (struct list *);
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -104,10 +106,7 @@ start_process (void *cmdline_copy_)
    exception), returns -1.  If TID is invalid or if it was not a
    child of the calling process, or if process_wait() has already
    been successfully called for the given TID, returns -1
-   immediately, without waiting.
-
-   This function will be implemented in problem 2-2.  For now, it
-   does nothing. */
+   immediately, without waiting. */
 int
 process_wait (tid_t child_tid UNUSED) 
 {
@@ -118,24 +117,32 @@ process_wait (tid_t child_tid UNUSED)
     return -1;
 
   c->has_been_waited_on = true;
+  /* Need to wait for child to finish executing. */
   if(c->exit_status == STILL_ALIVE)
     sema_down (&c->child_thread->exec_sema);
   
   return c->exit_status;
 }
 
-/* Free the current process's resources. */
+/* 
+  Exit the process and free the current process's resources. 
+  Idea to free children and close files here inspired by:
+  https://github.com/MohamedSamirShabaan/Pintos-Project-2
+*/
 void
 process_exit (void)
 {
   struct thread *cur = thread_current ();
   uint32_t *pd;
+  
+  /* Done executing, wake up parent. */
+  sema_up (&cur->exec_sema);
 
-  sema_up (&thread_current()->exec_sema);
-
-  thread_current ()->parent = NULL;
-
-  file_close(cur->executable_file);
+  /* Clean up memory by freeing children and closing files. */
+  process_free_children (&cur->children);
+  process_close_all_open_files (&cur->open_files);
+  file_close (cur->executable_file);
+  cur->parent = NULL;
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
@@ -153,6 +160,37 @@ process_exit (void)
       pagedir_activate (NULL);
       pagedir_destroy (pd);
     }
+}
+
+/* Free all children for a given process. */
+static void
+process_free_children (struct list *child_list)
+{
+  if (!list_empty (child_list))
+  {
+    struct list_elem *e;
+    for (e = list_begin (child_list); e != list_end (child_list); e = list_next (e))
+    {
+      struct thread_child *c = list_entry(e, struct thread_child, child_elem);
+      list_remove (e);
+    }
+  }
+}
+
+/* Close all opened files. */
+static void
+process_close_all_open_files (struct list *open_files)
+{
+  if (!list_empty (open_files))
+  {
+    struct list_elem *e;
+    for (e = list_begin (open_files); e != list_end (open_files); e = list_next (e))
+    {
+      struct thread_open_file *tof = list_entry(e, struct thread_open_file, elem);
+      file_close (tof->file);
+      list_remove (e);
+    }
+  }
 }
 
 /* Sets up the CPU for running user code in the current
